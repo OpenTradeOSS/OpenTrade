@@ -114,14 +114,26 @@ function NewAgentForm() {
   const [name, setName] = useState("");
   const [template, setTemplate] = useState("default");
   const [harness, setHarness] = useState<HarnessId>("claude");
-  // CLI availability drives the picker: a missing codex install is shown but disabled.
+  // Don't override a choice the user already made once probes settle.
+  const harnessTouchedRef = useRef(false);
+  // CLI availability drives the picker: a missing install is shown but disabled.
   const probes = trpc.onboarding.harnesses.useQuery(undefined, { staleTime: 60_000 });
+  const claudeFound = probes.data?.claude.found ?? true;
   const codexFound = probes.data?.codex.found ?? false;
+  useEffect(() => {
+    if (harnessTouchedRef.current || !probes.data) return;
+    // Only Codex installed → default to it. Both (or neither / only Claude) → Claude.
+    if (!probes.data.claude.found && probes.data.codex.found) {
+      setHarness("codex");
+    }
+  }, [probes.data]);
   const harnessOptions: PickerOption[] = [
     {
       value: "claude",
       icon: <HarnessGlyph harness="claude" />,
       label: "Claude Code",
+      hint: claudeFound ? undefined : "claude CLI not found",
+      disabled: !claudeFound,
     },
     {
       value: "codex",
@@ -230,7 +242,10 @@ function NewAgentForm() {
             label={harness === "codex" ? "Codex" : "Claude Code"}
             options={harnessOptions}
             value={harness}
-            onValueChange={(v) => setHarness(v as HarnessId)}
+            onValueChange={(v) => {
+              harnessTouchedRef.current = true;
+              setHarness(v as HarnessId);
+            }}
           />
           <PickerPill
             icon={
