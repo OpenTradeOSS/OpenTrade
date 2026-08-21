@@ -1,10 +1,39 @@
+import { globSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { OPENTRADE_HOME } from "../../db/client";
 
 /**
+ * Extra PATH dirs so GUI launches find `claude` / `codex`. Install locations from
+ * the official CLIs: native installers put binaries in `~/.local/bin` (and
+ * `%USERPROFILE%\.local\bin` on Windows); npm -g on Windows uses `%APPDATA%\npm`.
+ */
+function extraPathDirs(home: string): string[] {
+  if (process.platform === "win32") {
+    const appdata = process.env.APPDATA;
+    return [
+      join(home, ".opentrade", "bin"),
+      join(home, ".local", "bin"), // Claude Code / Codex native installer
+      ...(appdata ? [join(appdata, "npm")] : []), // npm install -g
+    ];
+  }
+  // macOS + Linux (original macOS list + nvm; Linux shares ~/.local/bin per the docs)
+  return [
+    join(home, ".opentrade", "bin"),
+    join(home, ".local", "bin"),
+    join(home, ".bun", "bin"),
+    join(home, "bin"),
+    ...globSync(join(home, ".nvm/versions/node/*/bin")),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ];
+}
+
+/**
  * Build the environment for an agent's PTY. We inherit the app's env, ensure the
- * usual macOS bin dirs are on PATH (so `claude`, `git`, etc. resolve), and inject
+ * usual bin dirs are on PATH (so `claude`, `codex`, `git`, etc. resolve), and inject
  * OPENTRADE_* identifiers. The hooks-server port/token (OPENTRADE_PORT /
  * OPENTRADE_TOKEN) are layered in by M3.
  *
@@ -27,19 +56,8 @@ export function buildAgentEnv(
 
   for (const key of opts?.stripEnvKeys ?? []) delete base[key];
 
-  const home = homedir();
-  const extraPathDirs = [
-    join(home, ".opentrade", "bin"),
-    join(home, ".local", "bin"),
-    join(home, ".bun", "bin"),
-    join(home, "bin"),
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-  ];
   const currentPath = base.PATH ?? "";
-  const merged = [...extraPathDirs, ...currentPath.split(delimiter)].filter(Boolean);
+  const merged = [...extraPathDirs(homedir()), ...currentPath.split(delimiter)].filter(Boolean);
   base.PATH = [...new Set(merged)].join(delimiter);
 
   base.TERM = "xterm-256color";
