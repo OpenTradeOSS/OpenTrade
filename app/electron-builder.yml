@@ -57,8 +57,32 @@ dmg:
       y: 220
       type: link
       path: /Applications
+win:
+  target:
+    # arm64 omitted: node-pty has no win32-arm64 prebuild.
+    - target: nsis
+      arch: [x64]
+  # Icon comes from build/icon.png.
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+# 1.1.0 avoids the legacy win-codesign bundle that needs symlink privileges on Windows.
+toolsets:
+  winCodeSign: 1.1.0
+linux:
+  category: Office;Finance
+  maintainer: OpenTrade contributors <opentrade@users.noreply.github.com>
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # arm64 omitted here too — same node-pty prebuilt-binary gap as win above.
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+deb:
+  packageName: opentrade
 publish:
   provider: github
   owner: OpenTradeOSS
   repo: OpenTrade
-npmRebuild: true
+npmRebuild: false
