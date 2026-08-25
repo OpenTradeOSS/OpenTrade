@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-almarai: "Almarai", ui-sans-serif, system-ui, sans-serif;
+  --font-instrument-serif: "Instrument Serif", ui-serif, Georgia, serif;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #000;
+}
+
+/* Creative Studio template palette (soft neutral whites on black). */
+.creative-studio {
+  --cs-cream: #f1f3f2;
+  --cs-ink: #e4e8e7;
+  --cs-muted: #919795;
+}

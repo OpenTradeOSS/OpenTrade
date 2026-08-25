@@ -3,9 +3,10 @@
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/dist/**", "!**/out/**", "!**/node_modules/**"]
+    "includes": ["**", "!**/dist", "!**/out", "!**/node_modules"]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "css": { "parser": { "tailwindDirectives": true } },
   "linter": {
     "enabled": true,
     "rules": { "recommended": true, "suspicious": { "noExplicitAny": "warn" } }

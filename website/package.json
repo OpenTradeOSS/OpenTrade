@@ -1,0 +1,33 @@
+{
+  "name": "@opentrade/website",
+  "version": "0.0.0",
+  "description": "OpenTrade marketing website.",
+  "license": "Elastic-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "lucide-react": "1.34.0",
+    "motion": "13.1.1",
+    "posthog-js": "1.418.16",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "tailwind-merge": "3.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.2.2",
+    "@types/node": "22.10.2",
+    "@types/react": "19.2.3",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "tailwindcss": "4.2.2",
+    "typescript": "5.9.2",
+    "vite": "7.1.12"
+  }
+}
