@@ -407,6 +407,33 @@ describe("analytics allowlist + normalizers", () => {
     ).toBe(true);
   });
 
+  test("RendererTrackInput carries a bounded error_code but not a message", () => {
+    // The updater relay's reason for existing: a bare `Error` plus its machine code.
+    expect(
+      RendererTrackInput.safeParse({
+        event: "app_error",
+        props: {
+          subsystem: "updater",
+          error_name: "Error",
+          error_code: "ENOTFOUND",
+          source: "caught",
+        },
+      }).success,
+    ).toBe(true);
+    // A `code` holding free text fails the same regex the host path uses, so the tRPC
+    // surface can't be used to smuggle a message through the field.
+    expect(
+      RendererTrackInput.safeParse({
+        event: "app_error",
+        props: {
+          subsystem: "updater",
+          error_name: "Error",
+          error_code: "Cannot parse releases feed: /Users/a/Library",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   test("sanitizeStack keeps bundle + dependency frames, drops node internals", () => {
     const err = new Error("boom");
     err.stack = [

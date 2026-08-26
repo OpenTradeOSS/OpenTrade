@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Agent } from "@shared/agent";
-import { errorNameOf, sanitizeStack } from "@shared/analytics";
+import { errorCodeOf, errorNameOf, sanitizeStack } from "@shared/analytics";
 import type { HostNotification, NotificationKind, RecentNotification } from "@shared/notify";
 import { type AppSettings, DEFAULT_SETTINGS } from "@shared/settings";
 import { SHELL_IPC } from "@shared/shell";
@@ -285,12 +285,18 @@ async function main() {
         quitting = false;
       }
       const frames = sanitizeStack(err);
+      // electron-updater reports check/download failures as a bare `Error`, so the class
+      // name says nothing and a network throw often leaves no frame of ours. `err.code`
+      // (or its `cause`'s, for an undici `fetch failed`) is the only token that separates
+      // "this machine can't reach the feed" from a server-side or signing failure.
+      const code = errorCodeOf(err);
       relayTrpc?.analytics.track
         .mutate({
           event: "app_error",
           props: {
             subsystem: "updater",
             error_name: errorNameOf(err),
+            ...(code ? { error_code: code } : {}),
             source: "caught",
             ...(frames.length ? { frames } : {}),
           },
