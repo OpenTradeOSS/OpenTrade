@@ -244,6 +244,11 @@ export const RendererTrackInput = z.discriminatedUnion("event", [
     props: z.strictObject({
       subsystem: z.enum(["renderer", "updater"]),
       error_name: errorName,
+      // Same bounded token as the host path (see `errorCode`). The updater's failures
+      // arrive as a bare `Error` from electron-updater — no useful class name and, when
+      // the throw is a network failure, often no frames of ours either — so without the
+      // code a failed update check is indistinguishable from any other.
+      error_code: errorCode.optional(),
       source: ErrorSource.optional(),
       frames: frames.optional(),
     }),
