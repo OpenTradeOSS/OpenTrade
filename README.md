@@ -74,8 +74,9 @@ Agents continue to get notified and work in the background, even if the app is c
 
 ## Install
 
-Download the latest `OpenTrade-<version>-arm64.dmg` from
-[Releases](https://github.com/OpenTradeOSS/OpenTrade/releases), open it, and drag OpenTrade to
+Download [OpenTrade-arm64.dmg](https://github.com/OpenTradeOSS/OpenTrade/releases/latest/download/OpenTrade-arm64.dmg)
+— that link always resolves to the newest release; older builds are on the
+[Releases](https://github.com/OpenTradeOSS/OpenTrade/releases) page. Open it and drag OpenTrade to
 Applications. Requires an Apple Silicon Mac. The app auto-updates from GitHub Releases.
 
 OpenTrade supports both Claude Code and Codex agents, so please install and sign into `claude`
