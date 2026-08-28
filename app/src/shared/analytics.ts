@@ -160,6 +160,15 @@ export const TELEMETRY_EVENTS = {
    *  is attempts with no outcome event: superseded by a later click, still pending, or a
    *  silent connect that found a dead grant and quietly stayed disconnected. */
   broker_connect_started: z.strictObject({ mode: z.enum(["interactive", "silent"]) }),
+  /**
+   * The consent browser actually opened. Splits the two ways an interactive connect
+   * ends in `OAUTH_TIMEOUT`: the user saw the page and walked away (this event, then
+   * the timeout), or never got one at all (the timeout with no such event).
+   * `armed_ms` is the slice of the consent budget already spent when the browser
+   * opened — the loopback's timer starts at bind, before the SDK registers the client
+   * and opens the page, so a slow round-trip eats the user's window.
+   */
+  broker_consent_opened: z.strictObject({ armed_ms: z.number().int().nonnegative() }),
   broker_connected: z.strictObject({}),
   broker_connect_failed: z.strictObject({
     error_name: errorName,
