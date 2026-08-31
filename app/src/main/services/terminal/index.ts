@@ -15,6 +15,7 @@ import { TerminalManager } from "./manager";
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 32;
 const IDLE_AFTER_MS = 1500;
+
 /**
  * A `claude --resume` launch that exits within this window almost always means
  * there was no resumable conversation (the user killed/exited the prior session),
@@ -97,7 +98,7 @@ export class TerminalService {
     agent: Agent,
     cols = DEFAULT_COLS,
     rows = DEFAULT_ROWS,
-    intent: "auto" | "resume" = "auto",
+    intent: "auto" | "resume" | "attach" = "auto",
   ): Promise<{ alive: boolean; state: ExecutionState }> {
     const state = this.registry.executionStateOf(agent.id);
     // I1 single-writer: never spawn an interactive PTY alongside a headless run
@@ -107,6 +108,11 @@ export class TerminalService {
     // The GUI is interacting again — clear the teardown guard.
     this.guiGone = false;
     if (!this.manager.isLive(agent.id)) {
+      // `attach` never spawns: it's the post-respawn reconnect, whose contract is
+      // "the PTY is already alive". If it died in the meantime, spawning here would
+      // relaunch the stored id as a resume and re-arm the respawn guard — the exact
+      // reattach leg of the cascade. Report dead; the pane offers Resume.
+      if (intent === "attach") return { alive: false, state };
       // Coalesce concurrent opens onto ONE spawn (B7): a second call arriving during
       // the multi-second async spawn awaits the same promise instead of re-running it.
       let inflight = this.opening.get(agent.id);
@@ -232,20 +238,31 @@ export class TerminalService {
 
   /**
    * If a resumed launch died almost immediately, there was no conversation to
-   * resume — respawn a fresh session and tell the renderer to reattach. A fresh
-   * launch (`continued:false`) that dies is left alone, so we never loop. Returns
-   * whether a respawn was undertaken (the exit handler keeps the lock held if so);
-   * the spawn itself is async (codex mints its session server-side) and reports
-   * `onInteractiveDown` if it ultimately fails, so nothing is stranded.
+   * resume — respawn a fresh session and tell the renderer to reattach. Loop
+   * safety is causal: a fresh launch (`continued:false`) that dies is left
+   * alone, and the renderer's post-respawn reconnect is attach-only (it cannot
+   * relaunch the stored id as a resume), so a harness that exits on launch
+   * can't ping-pong between our respawn and the reattach.
+   * Returns whether a respawn was undertaken (the exit handler keeps the lock held
+   * if so); the spawn itself is async (codex mints its session server-side) and
+   * reports `onInteractiveDown` if it ultimately fails, so nothing is stranded.
    */
   private maybeRespawnFresh(agentId: string): boolean {
     const launch = this.launches.get(agentId);
+    // A fresh launch that dies is left alone — respawning it would just repeat it.
     if (!launch || !launch.continued) return false;
+    // It stayed up long enough to be a real session, not a dead `--resume`.
     if (Date.now() - launch.at > RESPAWN_GUARD_MS) return false;
+    // A user-driven open is already spawning: let it bring the session up rather
+    // than racing it with a second, uncoalesced spawn (double onInteractiveUp,
+    // `launches` describing the wrong PTY).
+    if (this.opening.has(agentId)) return false;
 
     const agent = this.registry.get(agentId);
     if (!agent || agent.archivedAt !== null) return false;
-    this.spawn(agent, "fresh", DEFAULT_COLS, DEFAULT_ROWS)
+    // Register in `opening` so a concurrent openOrAttach (pane remount during the
+    // multi-second codex spawn) awaits THIS spawn instead of starting its own (B7).
+    const inflight = this.spawn(agent, "fresh", DEFAULT_COLS, DEFAULT_ROWS)
       .then(() => {
         // The GUI may have gone away DURING this async respawn (codex spawn takes
         // seconds); teardown already ran and won't see this PTY, so kill it now rather
@@ -260,7 +277,9 @@ export class TerminalService {
       .catch((err) => {
         console.error("[terminal] auto-respawn failed", err);
         this.wake.onInteractiveDown(agentId); // the writer is gone after all
-      });
+      })
+      .finally(() => this.opening.delete(agentId));
+    this.opening.set(agentId, inflight);
     return true;
   }
 

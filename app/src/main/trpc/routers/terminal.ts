@@ -11,7 +11,9 @@ export const terminalRouter = router({
         agentId: z.string(),
         cols: z.number().optional(),
         rows: z.number().optional(),
-        intent: z.enum(["auto", "resume"]).default("auto"),
+        // `attach` never spawns — the post-respawn reconnect, which must not
+        // relaunch a dead session as a resume (that re-armed the respawn loop).
+        intent: z.enum(["auto", "resume", "attach"]).default("auto"),
       }),
     )
     .mutation(async ({ ctx, input }) => {

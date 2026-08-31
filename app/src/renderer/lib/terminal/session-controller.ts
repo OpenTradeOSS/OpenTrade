@@ -65,11 +65,14 @@ class SessionController {
   /**
    * Reattach the focused agent after the host transparently respawned its
    * session (auto-respawn). The PTY is already alive, so a plain attach picks
-   * up the fresh stream + replay. Ignored if a different agent is now focused.
+   * up the fresh stream + replay — and `attach` guarantees exactly that: if the
+   * respawned PTY has ALREADY died, the host reports dead instead of spawning
+   * yet another launch (which resumed the stored id and looped the respawn).
+   * Ignored if a different agent is now focused.
    */
   reconnect(agentId: string) {
     if (this.currentAgentId !== agentId) return;
-    this.startSession(agentId, "auto");
+    this.startSession(agentId, "attach");
   }
 
   /** Stop showing any agent (e.g. selection cleared). PTYs keep running. */
@@ -80,7 +83,7 @@ class SessionController {
     this.teardownTransport();
   }
 
-  private startSession(agentId: string, intent: "auto" | "resume") {
+  private startSession(agentId: string, intent: "auto" | "resume" | "attach") {
     const myEpoch = ++this.epoch;
     this.currentAgentId = agentId;
     this.clearReconnect();
@@ -90,7 +93,7 @@ class SessionController {
     void this.connect(agentId, myEpoch, intent);
   }
 
-  private async connect(agentId: string, myEpoch: number, intent: "auto" | "resume" = "auto") {
+  private async connect(agentId: string, myEpoch: number, intent: "auto" | "resume" | "attach") {
     if (myEpoch !== this.epoch) return;
     this.setLiveness(agentId, "connecting");
     try {
@@ -107,18 +110,31 @@ class SessionController {
       const cols = this.runtime?.terminal.cols;
       const rows = this.runtime?.terminal.rows;
       // tRPC-first: ensure the session exists before opening the data socket.
-      await client.terminal.openOrAttach.mutate({ agentId, cols, rows, intent });
+      const { alive } = await client.terminal.openOrAttach.mutate({ agentId, cols, rows, intent });
       if (myEpoch !== this.epoch) return;
+      // An `attach` found no live PTY (the respawned session died before we got
+      // here). `startSession` reset the screen, so repaint the end-state banner
+      // rather than connecting a socket to nothing.
+      if (!alive && intent === "attach") {
+        this.setLiveness(agentId, "dead");
+        this.runtime?.terminal.write("\r\n\x1b[2m[session ended — Resume to continue]\x1b[0m\r\n");
+        return;
+      }
       const { url } = await client.terminal.wsEndpoint.query({ agentId });
       if (myEpoch !== this.epoch) return;
-      this.openSocket(agentId, url, myEpoch);
+      this.openSocket(agentId, url, myEpoch, intent);
     } catch {
       if (myEpoch !== this.epoch) return;
-      this.scheduleReconnect(agentId, myEpoch);
+      this.scheduleReconnect(agentId, myEpoch, intent);
     }
   }
 
-  private openSocket(agentId: string, url: string, myEpoch: number) {
+  private openSocket(
+    agentId: string,
+    url: string,
+    myEpoch: number,
+    intent: "auto" | "resume" | "attach",
+  ) {
     const runtime = this.runtime;
     if (!runtime) return;
     this.transport = connectTerminalWs(url, {
@@ -141,12 +157,17 @@ class SessionController {
       onClose: (code) => {
         if (myEpoch !== this.epoch) return;
         this.transport = null;
-        this.handleClose(agentId, code, myEpoch);
+        this.handleClose(agentId, code, myEpoch, intent);
       },
     });
   }
 
-  private handleClose(agentId: string, code: number, myEpoch: number) {
+  private handleClose(
+    agentId: string,
+    code: number,
+    myEpoch: number,
+    intent: "auto" | "resume" | "attach",
+  ) {
     // 1000: clean close right after an exit frame — onExit already marked dead.
     if (code === 1000) return;
     // Session gone on the host (daemon restarted): dead, Resume re-establishes.
@@ -156,10 +177,17 @@ class SessionController {
     }
     // 4408 (backpressure valve) or 1006 (abnormal, e.g. daemon crash): the
     // session likely still lives — reconnect with replay to catch up / recover.
-    this.scheduleReconnect(agentId, myEpoch);
+    this.scheduleReconnect(agentId, myEpoch, intent);
   }
 
-  private scheduleReconnect(agentId: string, myEpoch: number) {
+  /** Retries carry the ORIGINAL intent: an `attach` lineage must stay spawn-less
+   *  across transient failures, or a retry would relaunch the dead session as a
+   *  resume — the reattach leg of the respawn cascade, reopened by a hiccup. */
+  private scheduleReconnect(
+    agentId: string,
+    myEpoch: number,
+    intent: "auto" | "resume" | "attach",
+  ) {
     if (myEpoch !== this.epoch) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.setLiveness(agentId, "dead");
@@ -169,7 +197,7 @@ class SessionController {
     this.reconnectAttempts++;
     this.setLiveness(agentId, "connecting");
     this.reconnectTimer = setTimeout(() => {
-      if (myEpoch === this.epoch) void this.connect(agentId, myEpoch);
+      if (myEpoch === this.epoch) void this.connect(agentId, myEpoch, intent);
     }, delay);
   }
 
