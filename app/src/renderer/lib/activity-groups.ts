@@ -173,6 +173,16 @@ export function orderState(
   const decision = group.entries.find((e) => e.kind === "approval_decision");
   const decisionStatus = (decision?.payload as { status?: unknown } | undefined)?.status;
 
+  // An option EXERCISE is not an order: it never appears in the order ledger, so
+  // the complete-ledger "no match → failed" verdict below would wrongly go red.
+  // The broker's accept/reject of the exercise request is its terminal signal.
+  if (intentParsed(group)?.kind === "exercise") {
+    if (observedOk === true) return "filled";
+    if (observedOk === false || decisionStatus === "rejected" || decisionStatus === "expired")
+      return "failed";
+    return decisionStatus === "approved" ? "working" : "proposed";
+  }
+
   if (observedOk === false || decisionStatus === "rejected" || decisionStatus === "expired")
     return "failed";
   if (orderId) return "working"; // reached RH, just not in the cached ledger (yet)

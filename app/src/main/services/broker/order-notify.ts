@@ -1,5 +1,6 @@
 import type { OrderStatus } from "@shared/broker";
 import type { HostNotification } from "@shared/notify";
+import { legsLabel, STANDARD_MULTIPLIER } from "@shared/options";
 
 /**
  * RH lifecycle states that are *absorbing* — an order never leaves them. Matched
@@ -51,25 +52,35 @@ function verbFor(state: string | null): string {
   }
 }
 
-/** "2 AAPL" / "$100 AAPL" / "AAPL" — quantity clause of the body. */
+/** "2 AAPL" / "$100 AAPL" / "AAPL" / "1 TLT $86C 11/20/26" — quantity clause of the body. */
 function quantityClause(o: OrderStatus): string {
   const shares = o.cumulativeQuantity ?? o.quantity;
-  const sym = o.symbol ?? "";
-  if (shares != null && shares > 0) return `${trimNum(shares)} ${sym}`.trim();
+  const sym = o.assetType === "option" ? legsLabel(o.legs ?? []) : (o.symbol ?? "");
+  // Coin quantities go far below equity precision — 6 decimals would round a
+  // 1-satoshi (1e-8 BTC) fill to "0 BTC".
+  const decimals = o.assetType === "crypto" ? 8 : 6;
+  if (shares != null && shares > 0) return `${trimNum(shares, decimals)} ${sym}`.trim();
   if (o.dollarAmount != null && o.dollarAmount > 0)
     return `$${trimNum(o.dollarAmount)} ${sym}`.trim();
   return sym || "order";
 }
 
-/** Drop trailing zeros from a fractional quantity/price without losing precision. */
-function trimNum(n: number): string {
-  return Number(n.toFixed(6)).toString();
+/** Drop trailing zeros from a fractional quantity/price without losing precision.
+ *  String-trimmed (not round-tripped through Number) so tiny coin quantities render
+ *  as "0.00000001", never scientific notation. */
+function trimNum(n: number, decimals = 6): string {
+  return n
+    .toFixed(decimals)
+    .replace(/(\.\d*?)0+$/, "$1")
+    .replace(/\.$/, "");
 }
 
 /**
  * Format an order-execution notification. Body reads like
  * `"BUY 2 AAPL — filled at $182.34"`; price is included only for fills (via
- * `avgPrice`). Title is `"<agent> — Order filled"`.
+ * `avgPrice`). An option fill quotes the per-contract cost (`$79.00`, the
+ * per-share price × multiplier — what the account was actually debited per
+ * contract). Title is `"<agent> — Order filled"`.
  */
 export function orderNotification(
   o: OrderStatus,
@@ -78,7 +89,13 @@ export function orderNotification(
 ): HostNotification {
   const verb = verbFor(o.state);
   const side = o.side ? o.side.toUpperCase() : "ORDER";
-  const priced = verb === "filled" && o.avgPrice != null ? ` at $${trimNum(o.avgPrice)}` : "";
+  const perUnit =
+    o.avgPrice == null
+      ? null
+      : o.assetType === "option"
+        ? o.avgPrice * (o.multiplier ?? STANDARD_MULTIPLIER)
+        : o.avgPrice;
+  const priced = verb === "filled" && perUnit != null ? ` at $${trimNum(perUnit)}` : "";
   return {
     kind: "order",
     title: `${agentName ?? "agent"} — Order ${verb}`,

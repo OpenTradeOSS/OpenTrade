@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { GATED_TOOL_MATCHER, GATED_TOOLS } from "@shared/robinhood-tools";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import type { Db } from "../../db/client";
 import { SCHEMA_DDL } from "../../db/ddl";
@@ -167,15 +168,21 @@ describe("AgentRegistry — codex scaffold divergence", () => {
     const toml = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(toml).toContain('approval_policy = "on-request"');
     expect(toml).toContain("[mcp_servers.robinhood]");
-    // The fail-closed anchor: order tools ALWAYS prompt ("approve" would mean
-    // pre-approved!), everything else pre-allowed like claude's allowlist.
+    // The fail-closed anchor: every money-mover in the shared table ALWAYS prompts
+    // ("approve" would mean pre-approved!), everything else pre-allowed like
+    // claude's allowlist. Spot-check one tool per asset class + the exercise pair
+    // against literal names so a gutted table can't silently pass its own test.
+    for (const t of GATED_TOOLS) {
+      expect(toml).toContain(`[mcp_servers.robinhood.tools.${t}]\napproval_mode = "prompt"`);
+    }
     for (const t of [
       "place_equity_order",
       "place_option_order",
-      "cancel_equity_order",
-      "cancel_option_order",
+      "place_crypto_order",
+      "exercise_option",
+      "cancel_option_exercise",
     ]) {
-      expect(toml).toContain(`[mcp_servers.robinhood.tools.${t}]\napproval_mode = "prompt"`);
+      expect(GATED_TOOLS).toContain(t);
     }
     expect(toml).toContain('default_tools_approval_mode = "approve"');
     // Project trust suppresses the TUI's first-run trust prompt — keyed by the
@@ -189,7 +196,10 @@ describe("AgentRegistry — codex scaffold divergence", () => {
     // Gate hooks: claude-compatible hooks.json + executable scripts, abs paths.
     const hooks = JSON.parse(readFileSync(join(codexHome, "hooks.json"), "utf8"));
     const pre = hooks.hooks.PreToolUse[0];
-    expect(pre.matcher).toBe("mcp__robinhood__(place|cancel)_(equity|option)_order");
+    expect(pre.matcher).toBe(GATED_TOOL_MATCHER);
+    // The regex form must actually match the prefixed tool names Claude Code sees.
+    expect(new RegExp(`^${pre.matcher}$`).test("mcp__robinhood__place_crypto_order")).toBe(true);
+    expect(new RegExp(`^${pre.matcher}$`).test("mcp__robinhood__get_equity_quotes")).toBe(false);
     // The command is a shell string carrying the non-secret identifiers (codex
     // cleans the hook env; the scripts recover port/token from the manifest).
     expect(pre.hooks[0].command).toContain(join(codexHome, "hooks", "approval-gate.sh"));
@@ -233,7 +243,12 @@ describe("AgentRegistry — codex scaffold divergence", () => {
     // settings.json is present locally; clean CI builds lack it and shipped ungated.)
     const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
     const pre = settings.hooks.PreToolUse[0];
-    expect(pre.matcher).toBe("mcp__robinhood__(place|cancel)_(equity|option)_order");
+    expect(pre.matcher).toBe(GATED_TOOL_MATCHER);
+    expect(settings.hooks.PostToolUse[0].matcher).toBe(GATED_TOOL_MATCHER);
+    // Reads and cosmetic writes ride the allowlist; money-movers must NOT.
+    expect(settings.permissions.allow).toContain("mcp__robinhood__get_*");
+    expect(settings.permissions.allow).toContain("mcp__robinhood__add_to_watchlist");
+    expect(settings.permissions.allow).not.toContain("mcp__robinhood__place_crypto_order");
     expect(pre.hooks[0].command).toContain(".claude/hooks/approval-gate.sh");
     expect(existsSync(join(dir, ".claude", "hooks", "approval-gate.sh"))).toBe(true);
   });

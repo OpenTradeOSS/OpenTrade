@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   mapAccounts,
+  mapCryptoOrderStatuses,
+  mapCryptoPositions,
+  mapCryptoQuotes,
+  mapOptionInstruments,
+  mapOptionOrderStatuses,
+  mapOptionPositions,
+  mapOptionQuotes,
   mapOrderStatuses,
   mapPortfolio,
   mapPositions,
@@ -57,6 +64,7 @@ describe("mapAccounts", () => {
     expect(accounts).toHaveLength(2);
     expect(accounts[0]).toEqual({
       accountNumber: "991422569",
+      rhsAccountNumber: "991422569",
       type: "individual",
       agentic: false,
       isDefault: true,
@@ -88,6 +96,8 @@ describe("mapPortfolio", () => {
       cash: 1874.6,
       dayChange: null,
       dayChangePct: null,
+      optionsValue: null,
+      cryptoValue: null,
     });
   });
 });
@@ -169,6 +179,7 @@ describe("mapOrderStatuses", () => {
   test("takes avg_price as VWAP and cumulative_quantity as executed — NOT limit/ordered", () => {
     const [o] = mapOrderStatuses({ data: { orders: [filledLimit] } });
     expect(o).toEqual({
+      assetType: "equity",
       id: "6a2c9cb7-a947-4f2d-8771-00c5f3f68b6f",
       symbol: "INTC",
       side: "buy",
@@ -269,5 +280,379 @@ describe("mapQuotes", () => {
       bidPrice: 125.21,
       askPrice: 125.42,
     });
+  });
+});
+
+// ---- options: real shapes from the live MCP (2026-08-27) ----
+
+const TLT_ID = "e9c444cc-5ccc-4dfe-8fd9-64daf22d6338";
+
+const liveOptionOrder = {
+  id: "6a908e72-e3e6-451f-b9bc-e765a26c5056",
+  chain_id: "644f21f0-a166-4c94-bd67-02568d3a5940",
+  chain_symbol: "TLT",
+  state: "filled",
+  type: "limit",
+  trigger: "immediate",
+  direction: "debit",
+  quantity: "1.00000",
+  processed_quantity: "1.00000",
+  pending_quantity: "0.00000",
+  canceled_quantity: "0.00000",
+  price: "0.79000000",
+  stop_price: null,
+  premium: "79.00000000",
+  processed_premium: "79",
+  trade_value_multiplier: "100.0000",
+  time_in_force: "gfd",
+  market_hours: "regular_hours",
+  opening_strategy: "long_call",
+  closing_strategy: null,
+  placed_agent: "agentic",
+  created_at: "2026-08-27T19:22:26.187483Z",
+  updated_at: "2026-08-27T19:22:26.624039Z",
+  last_transaction_at: null,
+  is_replaceable: false,
+  legs: [
+    {
+      id: "de66ccba-fd05-47a4-8e11-dc3510c45a05",
+      option_id: TLT_ID,
+      side: "buy",
+      position_effect: "open",
+      ratio_quantity: 1,
+      expiration_date: "2026-11-20",
+      strike_price: "86.0000",
+      option_type: "call",
+      executions: [
+        {
+          id: "6a908e72-ac36-46ae-a2c3-042f1fb9ef22",
+          price: "0.79000000",
+          quantity: "1.00000",
+          settlement_date: "2026-08-28",
+          trade_date: "2026-08-27",
+          timestamp: "2026-08-27T19:22:26.462000Z",
+        },
+      ],
+    },
+  ],
+};
+
+describe("mapOptionOrderStatuses", () => {
+  test("maps the live single-leg order in per-contract/per-share units with its contract", () => {
+    const [o] = mapOptionOrderStatuses({ data: { orders: [liveOptionOrder] } });
+    expect(o.id).toBe("6a908e72-e3e6-451f-b9bc-e765a26c5056");
+    expect(o.assetType).toBe("option");
+    expect(o.symbol).toBe("TLT"); // chain_symbol — the underlying
+    expect(o.side).toBe("buy"); // the single leg's side, not the net direction
+    expect(o.direction).toBe("debit");
+    expect(o.type).toBe("limit");
+    expect(o.state).toBe("filled");
+    expect(o.quantity).toBe(1);
+    expect(o.cumulativeQuantity).toBe(1);
+    expect(o.limitPrice).toBe(0.79);
+    expect(o.avgPrice).toBe(0.79); // processed_premium / (contracts × multiplier)
+    expect(o.multiplier).toBe(100);
+    expect(o.premium).toBe(79);
+    expect(o.processedPremium).toBe(79);
+    expect(o.strategy).toBe("long_call");
+    expect(o.dollarAmount).toBeNull();
+    expect(o.lastTransactionAt).toBe("2026-08-27T19:22:26.624039Z"); // updated_at fallback
+    expect(o.legs).toHaveLength(1);
+    expect(o.legs?.[0]).toEqual({
+      optionId: TLT_ID,
+      side: "buy",
+      positionEffect: "open",
+      ratioQuantity: 1,
+      contract: {
+        optionId: TLT_ID,
+        chainSymbol: "TLT",
+        expirationDate: "2026-11-20",
+        strikePrice: 86,
+        optionType: "call",
+        multiplier: 100,
+      },
+    });
+  });
+
+  test("a spread's side is its net direction; an unfilled order has no avg price", () => {
+    const [o] = mapOptionOrderStatuses({
+      data: {
+        orders: [
+          {
+            ...liveOptionOrder,
+            state: "queued",
+            processed_quantity: "0.00000",
+            processed_premium: "0",
+            legs: [
+              { ...liveOptionOrder.legs[0], executions: [] },
+              {
+                ...liveOptionOrder.legs[0],
+                option_id: "x",
+                side: "sell",
+                strike_price: "90.0000",
+                executions: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(o.side).toBe("debit");
+    expect(o.cumulativeQuantity).toBe(0);
+    expect(o.avgPrice).toBeNull();
+    expect(o.legs?.[1].contract?.strikePrice).toBe(90);
+  });
+
+  test("falls back to the legs' execution VWAP when premium fields are absent", () => {
+    const { premium: _p, processed_premium: _pp, ...noPremium } = liveOptionOrder;
+    const [o] = mapOptionOrderStatuses({ data: { orders: [noPremium] } });
+    expect(o.avgPrice).toBe(0.79);
+  });
+
+  test("empty response yields no orders", () => {
+    expect(mapOptionOrderStatuses({ data: { orders: [] } })).toEqual([]);
+  });
+});
+
+describe("mapOptionPositions", () => {
+  test("maps the live position; average_price stays per contract (multiplier in)", () => {
+    const [p] = mapOptionPositions({
+      data: {
+        positions: [
+          {
+            option_id: TLT_ID,
+            chain_id: "644f21f0-a166-4c94-bd67-02568d3a5940",
+            chain_symbol: "TLT",
+            type: "long",
+            quantity: "1.0000",
+            average_price: "79.0000",
+            expiration_date: "2026-11-20",
+            trade_value_multiplier: "100.0000",
+            intraday_average_open_price: "79.0000",
+            intraday_quantity: "1.0000",
+            pending_buy_quantity: "0.0000",
+            pending_sell_quantity: "0.0000",
+            pending_exercise_quantity: "0.0000",
+            pending_assignment_quantity: "0.0000",
+            pending_expiration_quantity: "1.0000",
+            opened_at: "2026-08-27T19:22:26.260113Z",
+          },
+        ],
+      },
+    });
+    expect(p).toEqual({
+      optionId: TLT_ID,
+      chainId: "644f21f0-a166-4c94-bd67-02568d3a5940",
+      chainSymbol: "TLT",
+      type: "long",
+      quantity: 1,
+      intradayQuantity: 1,
+      averagePrice: 79,
+      intradayAverageOpenPrice: 79,
+      expirationDate: "2026-11-20",
+      multiplier: 100,
+      strikePrice: null, // not in the response — resolved via get_option_instruments
+      optionType: null,
+      lastPrice: null, // no price either — folded in from a quote
+      previousClose: null,
+      marketValue: null,
+      unrealizedPnl: null,
+      pendingQuantity: 1, // exercise + assignment + expiration
+    });
+  });
+});
+
+test("mapOptionInstruments resolves an option_id to its contract", () => {
+  const [c] = mapOptionInstruments({
+    data: {
+      instruments: [
+        {
+          id: TLT_ID,
+          chain_id: "644f21f0-a166-4c94-bd67-02568d3a5940",
+          chain_symbol: "TLT",
+          underlying_type: "equity",
+          expiration_date: "2026-11-20",
+          sellout_datetime: "2026-11-20T20:45:00+00:00",
+          strike_price: "86.0000",
+          type: "call",
+          state: "active",
+          tradability: "tradable",
+          trade_value_multiplier: "100.0000",
+          min_ticks: { above_tick: "0.05", below_tick: "0.01", cutoff_price: "3.00" },
+        },
+      ],
+    },
+  });
+  expect(c).toEqual({
+    optionId: TLT_ID,
+    chainSymbol: "TLT",
+    expirationDate: "2026-11-20",
+    strikePrice: 86,
+    optionType: "call",
+    multiplier: 100,
+  });
+});
+
+describe("mapOptionQuotes", () => {
+  const liveQuote = {
+    quote: {
+      instrument_id: TLT_ID,
+      ask_price: "0.770000",
+      ask_size: 1,
+      bid_price: "0.760000",
+      bid_size: 123,
+      break_even_price: "86.770000",
+      adjusted_mark_price: "0.770000",
+      mark_price: "0.765000",
+      previous_close_price: "0.850000",
+      previous_close_date: "2026-08-26",
+      implied_volatility: "0.099614",
+      delta: "0.308245",
+      gamma: "0.088061",
+      theta: "-0.010901",
+      vega: "0.141183",
+      open_interest: 28428,
+      volume: 259,
+      updated_at: "2026-08-27T19:46:28.647347216Z",
+    },
+    close: {
+      instrument_id: TLT_ID,
+      symbol: "TLT",
+      date: "2026-08-26",
+      price: "0.85",
+      interpolated: false,
+      source: "ddb-market-snapshot",
+    },
+  };
+
+  test("mark from mark_price, prior close from the official close", () => {
+    const [q] = mapOptionQuotes({ data: { results: [liveQuote] } });
+    expect(q).toEqual({
+      optionId: TLT_ID,
+      mark: 0.765,
+      bidPrice: 0.76,
+      askPrice: 0.77,
+      previousClose: 0.85,
+      impliedVolatility: 0.099614,
+      delta: 0.308245,
+      theta: -0.010901,
+    });
+  });
+
+  test("falls back to the quote's previous_close_price when the close is missing", () => {
+    const [q] = mapOptionQuotes({ data: { results: [{ quote: liveQuote.quote }] } });
+    expect(q.previousClose).toBe(0.85);
+  });
+});
+
+// ---- crypto ----
+
+describe("mapCryptoQuotes", () => {
+  // Real shape from live get_crypto_quotes (2026-08-31): symbol comes back
+  // UNhyphenated; open_price is the prior midnight-ET close.
+  const liveQuote = {
+    symbol: "BTCUSD",
+    id: "3d961844-d360-45fc-989b-f6fca761d511",
+    bid_price: "77951.48703514",
+    bid_time: "2026-08-31T18:39:00.037-04:00",
+    ask_price: "79432.03469233",
+    ask_time: "2026-08-31T18:39:01.544-04:00",
+    mark_price: "78691.760863735",
+    open_price: "77747.085",
+    routing: "Market Maker Routing",
+    updated_at: "2026-08-31T18:39:01.63-04:00",
+  };
+
+  test("maps the live shape: mark, bid/ask, open_price as the previous close", () => {
+    const [q] = mapCryptoQuotes({ data: { results: [liveQuote] } });
+    expect(q.symbol).toBe("BTCUSD");
+    expect(q.mark).toBeCloseTo(78691.760863735);
+    expect(q.bidPrice).toBeCloseTo(77951.48703514);
+    expect(q.askPrice).toBeCloseTo(79432.03469233);
+    expect(q.previousClose).toBeCloseTo(77747.085);
+  });
+});
+
+describe("mapCryptoPositions", () => {
+  // Constructed from the tool's documented field guide (the live account held no
+  // crypto when this was written) — verify against a real position when one exists.
+  test("asset from currency.code; avg cost from summed direct cost bases", () => {
+    const [p] = mapCryptoPositions({
+      data: {
+        results: [
+          {
+            currency: { code: "BTC" },
+            quantity: "0.003",
+            quantity_transferable: "0.002",
+            intraday_quantity: "0.001",
+            cost_bases: [
+              { direct_cost_basis: "160.00", direct_quantity: "0.002" },
+              { direct_cost_basis: "0", direct_quantity: "0" },
+            ],
+          },
+        ],
+      },
+    });
+    expect(p.assetCode).toBe("BTC");
+    expect(p.quantity).toBe(0.003);
+    expect(p.transferableQuantity).toBe(0.002);
+    expect(p.avgCost).toBeCloseTo(80000); // $160 over 0.002 BTC — direct buys only
+    expect(p.directQuantity).toBe(0.002); // the other 0.001 has no captured basis
+    expect(p.intradayQuantity).toBe(0.001);
+    expect(p.lastPrice).toBeNull(); // no price in the response — folded from quotes
+  });
+
+  test("no cost bases → no average, never NaN", () => {
+    const [p] = mapCryptoPositions({
+      data: { results: [{ currency: { code: "DOGE" }, quantity: "100" }] },
+    });
+    expect(p.avgCost).toBeNull();
+    expect(p.directQuantity).toBeNull();
+  });
+});
+
+describe("mapCryptoOrderStatuses", () => {
+  // Constructed from the tool's documented response guide — verify against the
+  // first real gated crypto order (TODO.md).
+  test("maps onto the shared OrderStatus in coin units", () => {
+    const [o] = mapCryptoOrderStatuses({
+      data: {
+        rhs_account_number: "547526228",
+        results: [
+          {
+            id: "order-1",
+            currency_code: "BTC",
+            currency_pair_id: "3d961844-d360-45fc-989b-f6fca761d511",
+            side: "buy",
+            type: "limit",
+            state: "filled",
+            state_group: "closed",
+            quantity: "0.00127",
+            cumulative_quantity: "0.00127",
+            average_price: "78650.00",
+            limit_price: "78700.00",
+            fee: "0.45",
+            initiator_type: "agent",
+            created_at: "2026-08-31T18:00:00Z",
+            updated_at: "2026-08-31T18:00:05Z",
+          },
+        ],
+      },
+    });
+    expect(o.id).toBe("order-1");
+    expect(o.assetType).toBe("crypto");
+    expect(o.symbol).toBe("BTC");
+    expect(o.side).toBe("buy");
+    expect(o.state).toBe("filled");
+    expect(o.quantity).toBe(0.00127);
+    expect(o.cumulativeQuantity).toBe(0.00127);
+    expect(o.avgPrice).toBe(78650);
+    expect(o.limitPrice).toBe(78700);
+    expect(o.fees).toBe(0.45);
+    expect(o.lastTransactionAt).toBe("2026-08-31T18:00:05Z");
+  });
+
+  test("empty response yields no orders", () => {
+    expect(mapCryptoOrderStatuses({ data: { results: [] } })).toEqual([]);
   });
 });

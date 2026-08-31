@@ -2,11 +2,17 @@ import { errorNameOf } from "@shared/analytics";
 import type {
   Account,
   BrokerConnectionStatus,
+  CryptoPosition,
+  CryptoQuote,
+  OptionContract,
+  OptionPosition,
+  OptionQuote,
   OrderStatus,
   Portfolio,
   Position,
   Quote,
 } from "@shared/broker";
+import { STANDARD_MULTIPLIER } from "@shared/options";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { brokerCache } from "../../db/schema";
@@ -100,8 +106,15 @@ export class BrokerService {
   private focused = false;
   /** Guards against overlapping polls when a poll outlasts the poll interval. */
   private polling = false;
-  /** Canonical order ledger, merged across full sweeps + recent polls, keyed by id. */
+  /** Canonical order ledger (equity + option), merged across full sweeps + recent polls, keyed by id. */
   private ledger = new Map<string, OrderStatus>();
+  /**
+   * Every option contract we've learned the identity of, by `option_id`. Seeded
+   * from the ledger's legs (each carries expiry/strike/type) and from
+   * `get_option_instruments` lookups; persisted under cache key `option_contracts`
+   * so a restart doesn't re-resolve. Contracts are immutable, so this never expires.
+   */
+  private contracts = new Map<string, OptionContract>();
   /** When the last full-history sweep ran; 0 forces a sweep on the next poll. */
   private lastFullSweepAt = 0;
   /**
@@ -128,6 +141,9 @@ export class BrokerService {
     bus.onEvent("settings:changed", () => {
       if (this.timer) this.startPolling();
     });
+    for (const c of this.readCache<OptionContract[]>("option_contracts")?.value ?? []) {
+      if (c?.optionId) this.contracts.set(c.optionId, c);
+    }
   }
 
   getStatus(): BrokerConnectionStatus {
@@ -136,10 +152,6 @@ export class BrokerService {
 
   getAccount(): Account | null {
     return this.account;
-  }
-
-  orderToolNames(): string[] {
-    return this.adapter.orderToolNames();
   }
 
   mcpServerConfig() {
@@ -306,8 +318,43 @@ export class BrokerService {
       this.writeCache("positions", enriched);
       updated.push("positions");
 
+      // Options and crypto positions are ISOLATED failure domains: their APIs are
+      // newer (crypto row shapes not yet live-verified), and a persistent failure
+      // there must not stall the equity/portfolio refresh above or the order-ledger
+      // sync below. On failure: keep the last cached value, log once per distinct
+      // failure, and carry on. (The ledger stays all-or-nothing by design — the
+      // "no match = definitive non-execution" verdict needs a COMPLETE ledger, so
+      // a failed sweep keeping the previous complete one is safer than a partial.)
+      // Options: positions name only the contract id + underlying; the contract's
+      // strike/type comes from the resolved-contract map and the price from a quote.
+      let optionPositions: OptionPosition[] = [];
+      try {
+        optionPositions = await this.pollOptionPositions(acct);
+        this.writeCache("option_positions", optionPositions);
+        updated.push("option_positions");
+        this.assetPollWarnings.delete("option positions");
+      } catch (err) {
+        this.warnAssetPoll("option positions", describeError(err));
+        optionPositions = this.readCache<OptionPosition[]>("option_positions")?.value ?? [];
+      }
+
+      // Crypto: positions carry no price either; fold in the pair quotes' mark.
+      let cryptoPositions: CryptoPosition[] = [];
+      try {
+        cryptoPositions = await this.pollCryptoPositions();
+        this.writeCache("crypto_positions", cryptoPositions);
+        updated.push("crypto_positions");
+        this.assetPollWarnings.delete("crypto positions");
+      } catch (err) {
+        this.warnAssetPoll("crypto positions", describeError(err));
+        cryptoPositions = this.readCache<CryptoPosition[]>("crypto_positions")?.value ?? [];
+      }
+
       // Today's account move: derived here because get_portfolio doesn't carry it.
-      this.writeCache("portfolio", withDayChange(portfolio, positions, quoteBySymbol));
+      this.writeCache(
+        "portfolio",
+        withDayChange(portfolio, positions, quoteBySymbol, optionPositions, cryptoPositions),
+      );
       updated.push("portfolio");
 
       await this.syncLedger(acct);
@@ -330,6 +377,16 @@ export class BrokerService {
     } finally {
       this.polling = false;
     }
+  }
+
+  /** Last logged failure per isolated asset domain, so a persistent option/crypto
+   *  fault writes ONE host.log line per distinct message, not one per 5s poll. */
+  private assetPollWarnings = new Map<string, string>();
+
+  private warnAssetPoll(domain: string, description: string): void {
+    if (this.assetPollWarnings.get(domain) === description) return;
+    this.assetPollWarnings.set(domain, description);
+    hostLog.warn(`${domain} poll failed: ${description}`);
   }
 
   // ---- poll-failure logging (deduped) ----
@@ -405,11 +462,134 @@ export class BrokerService {
   getAgenticOrdersCached(): { value: OrderStatus[]; fetchedAt: number } | null {
     return this.readCache<OrderStatus[]>("agentic_orders");
   }
+  getCachedOptionPositions(): { value: OptionPosition[]; fetchedAt: number } | null {
+    return this.readCache<OptionPosition[]>("option_positions");
+  }
+  getCachedCryptoPositions(): { value: CryptoPosition[]; fetchedAt: number } | null {
+    return this.readCache<CryptoPosition[]>("crypto_positions");
+  }
+
+  /** The numeric brokerage id crypto tools key on (falls back to the account number). */
+  private rhsAccount(): string | null {
+    return this.account ? (this.account.rhsAccountNumber ?? this.account.accountNumber) : null;
+  }
 
   /** Single-order lookup by id (resolves orders aged out of the poll window). */
   async getOrder(orderId: string): Promise<OrderStatus | null> {
     if (!this.account) return null;
-    return this.adapter.getOrder(this.account.accountNumber, orderId);
+    const acct = this.account.accountNumber;
+    const rhs = this.rhsAccount();
+    return (
+      (await this.adapter.getOrder(acct, orderId)) ??
+      (await this.adapter.getOptionOrder?.(acct, orderId)) ??
+      (rhs ? await this.adapter.getCryptoOrder?.(rhs, orderId) : null) ??
+      null
+    );
+  }
+
+  // ---- option contracts ----
+
+  /**
+   * Resolve option contract ids to their identity, for the approval gate's card
+   * (an order's `tool_input` names a contract only by UUID). Cache-first: the map
+   * already holds every contract the ledger or positions have ever mentioned;
+   * only genuinely new contracts (a first trade in a strike) go to
+   * `get_option_instruments`, in one batched call. Unknown ids are simply absent
+   * from the result — the card degrades to "option", never fails.
+   */
+  async resolveOptionContracts(optionIds: string[]): Promise<Map<string, OptionContract>> {
+    const out = new Map<string, OptionContract>();
+    const missing: string[] = [];
+    for (const id of new Set(optionIds)) {
+      const c = this.contracts.get(id);
+      if (c) out.set(id, c);
+      else missing.push(id);
+    }
+    if (missing.length > 0 && this.status === "connected" && this.adapter.getOptionContracts) {
+      const fetched = await this.adapter.getOptionContracts(missing);
+      this.rememberContracts(fetched);
+      for (const c of fetched) out.set(c.optionId, c);
+    }
+    return out;
+  }
+
+  /** Learn contracts (from a lookup or a ledger's legs) and persist the map. */
+  private rememberContracts(contracts: Iterable<OptionContract | null | undefined>): void {
+    let changed = false;
+    for (const c of contracts) {
+      if (!c?.optionId) continue;
+      const prev = this.contracts.get(c.optionId);
+      // Keep the most complete record; a ledger leg may lack a field a lookup has.
+      const merged: OptionContract = {
+        optionId: c.optionId,
+        chainSymbol: c.chainSymbol ?? prev?.chainSymbol ?? null,
+        expirationDate: c.expirationDate ?? prev?.expirationDate ?? null,
+        strikePrice: c.strikePrice ?? prev?.strikePrice ?? null,
+        optionType: c.optionType ?? prev?.optionType ?? null,
+        multiplier: c.multiplier ?? prev?.multiplier ?? null,
+      };
+      if (JSON.stringify(merged) !== JSON.stringify(prev)) {
+        this.contracts.set(c.optionId, merged);
+        changed = true;
+      }
+    }
+    if (changed) this.writeCache("option_contracts", [...this.contracts.values()]);
+  }
+
+  /**
+   * Open option positions with their contract identity and a live quote folded in.
+   * Positions carry neither (RH: "look up strike/type via get_option_instruments";
+   * price via get_option_quotes). Empty when the adapter has no options API.
+   */
+  private async pollOptionPositions(account: string): Promise<OptionPosition[]> {
+    if (!this.adapter.getOptionPositions) return [];
+    const raw = await this.adapter.getOptionPositions(account);
+    if (raw.length === 0) return [];
+    const ids = raw.map((p) => p.optionId).filter(Boolean);
+    const contracts = await this.resolveOptionContracts(ids);
+    const quotes = new Map<string, OptionQuote>();
+    if (this.adapter.getOptionQuotes) {
+      for (const q of await this.adapter.getOptionQuotes(ids)) quotes.set(q.optionId, q);
+    }
+    const positions = raw.map((p) =>
+      enrichOptionPosition(p, contracts.get(p.optionId), quotes.get(p.optionId)),
+    );
+    return positions;
+  }
+
+  /** Faucet: cached option positions if fresh enough, else a live poll. */
+  async getOptionPositionsLive(maxAgeMs: number): Promise<OptionPosition[]> {
+    const cached = this.readCache<OptionPosition[]>("option_positions");
+    if (cached && Date.now() - cached.fetchedAt <= maxAgeMs) return cached.value;
+    if (this.status === "connected") await this.pollOnce();
+    return this.readCache<OptionPosition[]>("option_positions")?.value ?? cached?.value ?? [];
+  }
+
+  /**
+   * Open crypto holdings with each pair's quote folded in (positions ship without
+   * a price, like equities). Quotes come back with unhyphenated symbols ("BTCUSD"),
+   * so they're matched to positions by `assetCode + "USD"`. Empty when the adapter
+   * has no crypto API or the account holds no coins.
+   */
+  private async pollCryptoPositions(): Promise<CryptoPosition[]> {
+    const rhs = this.rhsAccount();
+    if (!rhs || !this.adapter.getCryptoPositions) return [];
+    const raw = await this.adapter.getCryptoPositions(rhs);
+    if (raw.length === 0) return [];
+    const quotes = new Map<string, CryptoQuote>();
+    if (this.adapter.getCryptoQuotes) {
+      const pairs = raw.map((p) => `${p.assetCode}-USD`);
+      for (const q of await this.adapter.getCryptoQuotes(pairs)) quotes.set(q.symbol, q);
+    }
+    return raw.map((p) => enrichCryptoPosition(p, quotes.get(`${p.assetCode}USD`)));
+  }
+
+  /** Faucet: cached crypto positions if fresh enough, else a live poll. */
+  async getCryptoPositionsLive(maxAgeMs: number): Promise<CryptoPosition[]> {
+    const cached = this.readCache<CryptoPosition[]>("crypto_positions");
+    if (cached && Date.now() - cached.fetchedAt <= maxAgeMs) return cached.value;
+    if (this.status === "connected") await this.pollOnce();
+    return this.readCache<CryptoPosition[]>("crypto_positions")?.value ?? cached?.value ?? [];
   }
 
   /**
@@ -460,23 +640,49 @@ export class BrokerService {
   }
 
   /**
-   * Page through the account's order history via the pagination cursor. With no
-   * `createdAtGte` this walks the *entire* history (higher page cap); with one it
-   * fetches just that recent window. RH's list for this account is small, so even
-   * a full sweep is a handful of calls; the page guard caps it defensively.
+   * Page through the account's order history via the pagination cursor — the
+   * equity ledger plus, when the adapter has them, the option and crypto ledgers
+   * (RH keeps three lists; we hold one). With no `createdAtGte` this walks the
+   * *entire* history (higher page cap); with one it fetches just that recent
+   * window. RH's lists for this account are small, so even a full sweep is a
+   * handful of calls; the page guard caps it defensively. Option orders' legs name
+   * their contracts, so the contract map learns every traded contract for free here.
    */
   private async fetchHistory(
     account: string,
     opts: { createdAtGte?: string },
   ): Promise<OrderStatus[]> {
-    const maxPages = opts.createdAtGte ? 20 : 100;
+    const all = await this.fetchPages((cursor) =>
+      this.adapter.getAgenticOrders(account, { createdAtGte: opts.createdAtGte, cursor }),
+    );
+    const getOptionOrders = this.adapter.getOptionOrders?.bind(this.adapter);
+    if (getOptionOrders) {
+      const options = await this.fetchPages((cursor) =>
+        getOptionOrders(account, { createdAtGte: opts.createdAtGte, cursor }),
+      );
+      this.rememberContracts(options.flatMap((o) => (o.legs ?? []).map((l) => l.contract)));
+      all.push(...options);
+    }
+    const rhs = this.rhsAccount();
+    const getCryptoOrders = this.adapter.getCryptoOrders?.bind(this.adapter);
+    if (rhs && getCryptoOrders) {
+      all.push(
+        ...(await this.fetchPages((cursor) =>
+          getCryptoOrders(rhs, { createdAtGte: opts.createdAtGte, cursor }),
+        )),
+      );
+    }
+    return all;
+  }
+
+  private async fetchPages(
+    fetch: (cursor?: string) => Promise<{ orders: OrderStatus[]; cursor: string | null }>,
+    maxPages = 100,
+  ): Promise<OrderStatus[]> {
     const all: OrderStatus[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < maxPages; page++) {
-      const { orders, cursor: next } = await this.adapter.getAgenticOrders(account, {
-        createdAtGte: opts.createdAtGte,
-        cursor,
-      });
+      const { orders, cursor: next } = await fetch(cursor);
       all.push(...orders);
       if (!next) break;
       cursor = next;
@@ -525,16 +731,79 @@ function enrichPosition(p: Position, quote: Quote | undefined): Position {
 }
 
 /**
+ * Fold a contract's identity and live quote into an option position. Units follow
+ * RH: the quote is per share, the position's `averagePrice` is per contract with
+ * the multiplier already in — so P&L is `(mark × multiplier − averagePrice) ×
+ * contracts`, inverted for a short.
+ */
+export function enrichOptionPosition(
+  p: OptionPosition,
+  contract: OptionContract | undefined,
+  quote: OptionQuote | undefined,
+): OptionPosition {
+  const out: OptionPosition = {
+    ...p,
+    strikePrice: contract?.strikePrice ?? p.strikePrice,
+    optionType: contract?.optionType ?? p.optionType,
+    expirationDate: p.expirationDate ?? contract?.expirationDate ?? null,
+    multiplier: p.multiplier ?? contract?.multiplier ?? null,
+  };
+  const mark = quote?.mark ?? null;
+  if (mark === null) return out;
+  const mult = out.multiplier ?? STANDARD_MULTIPLIER;
+  const sign = out.type === "short" ? -1 : 1;
+  const perContract = mark * mult;
+  return {
+    ...out,
+    lastPrice: mark,
+    previousClose: quote?.previousClose ?? null,
+    marketValue: perContract * p.quantity * sign,
+    unrealizedPnl:
+      p.averagePrice !== null ? (perContract - p.averagePrice) * p.quantity * sign : null,
+  };
+}
+
+/**
+ * Fold a pair quote into a crypto holding: mark → lastPrice, market value, and
+ * P&L. The cost basis covers only **directly purchased** coins (transfers,
+ * rewards, and forks carry none), so P&L is computed over `directQuantity` — the
+ * lots whose cost is actually known — never extrapolated across the whole
+ * holding. Identical to whole-position P&L in the common all-direct case; null
+ * when no lot has a basis. All per coin; no multiplier, no shorts.
+ */
+export function enrichCryptoPosition(
+  p: CryptoPosition,
+  quote: CryptoQuote | undefined,
+): CryptoPosition {
+  const mark = quote?.mark ?? null;
+  if (mark === null) return p;
+  const basisQty = p.directQuantity ?? 0;
+  return {
+    ...p,
+    lastPrice: mark,
+    previousClose: quote?.previousClose ?? null,
+    marketValue: mark * p.quantity,
+    unrealizedPnl: p.avgCost !== null && basisQty > 0 ? (mark - p.avgCost) * basisQty : null,
+  };
+}
+
+/**
  * Derive today's account $/% move and attach it to the portfolio. Robinhood
  * doesn't return a daily figure, so we sum each position's intraday-aware change
  * (RH's own method): shares held since yesterday move from previous_close; shares
- * bought today move from their cost basis. % is against the prior account value
- * (total − today's change). Positions without a usable quote are skipped.
+ * bought today move from their cost basis. Option positions contribute the same
+ * way in contract units (× multiplier, inverted for a short); crypto in coins,
+ * against the prior **midnight-ET** boundary close (RH's "previous close" for a
+ * 24/7 market — so "Today" for crypto means "since midnight ET"). % is against
+ * the prior account value (total − today's change). Positions without a usable
+ * quote are skipped.
  */
 export function withDayChange(
   portfolio: Portfolio,
   positions: Position[],
   quotes: Map<string, Quote>,
+  optionPositions: OptionPosition[] = [],
+  cryptoPositions: CryptoPosition[] = [],
 ): Portfolio {
   let dayChange = 0;
   let counted = 0;
@@ -545,6 +814,33 @@ export function withDayChange(
     const overnight = p.quantity - intraday;
     const costToday = p.averageCost ?? q.last; // best available basis for today's shares
     dayChange += (q.last - q.previousClose) * overnight + (q.last - costToday) * intraday;
+    counted++;
+  }
+  for (const p of optionPositions) {
+    // Prices ride the enriched position itself (folded from the contract quote at
+    // enrichment) — like crypto below. Reading them here, not a parallel quote map,
+    // keeps options in "Today" even when a poll served cached positions (an
+    // options-API outage would otherwise silently drop their whole contribution).
+    if (p.lastPrice === null || p.previousClose === null) continue;
+    const mult = p.multiplier ?? STANDARD_MULTIPLIER;
+    const sign = p.type === "short" ? -1 : 1;
+    const intraday = p.intradayQuantity ?? 0;
+    const overnight = p.quantity - intraday;
+    // Today's contracts move from their own (per-contract, multiplier-included) basis.
+    const costToday = p.intradayAverageOpenPrice ?? p.averagePrice ?? p.lastPrice * mult;
+    dayChange +=
+      ((p.lastPrice - p.previousClose) * mult * overnight +
+        (p.lastPrice * mult - costToday) * intraday) *
+      sign;
+    counted++;
+  }
+  for (const p of cryptoPositions) {
+    // Prices ride the enriched position itself (folded from the pair quote).
+    if (p.lastPrice === null || p.previousClose === null) continue;
+    const intraday = p.intradayQuantity ?? 0;
+    const overnight = p.quantity - intraday;
+    const costToday = p.avgCost ?? p.lastPrice;
+    dayChange += (p.lastPrice - p.previousClose) * overnight + (p.lastPrice - costToday) * intraday;
     counted++;
   }
   if (counted === 0) return { ...portfolio, dayChange: null, dayChangePct: null };

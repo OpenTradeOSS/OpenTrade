@@ -53,10 +53,10 @@ const stackFrame = z
   .regex(/^(?:(?:@[\w.-]+\/)?[\w.-]+\/)?[\w.-]+\.js:\d+(?::\d+)?$/);
 const frames = z.array(stackFrame).max(10);
 
-const assetType = z.enum(["equity", "option", "other"]);
+const assetType = z.enum(["equity", "option", "crypto", "other"]);
 const orderSide = z.enum(["buy", "sell", "other"]);
 const orderType = z.enum(["market", "limit", "other"]);
-const orderKind = z.enum(["place", "cancel"]);
+const orderKind = z.enum(["place", "cancel", "exercise"]);
 
 /** Subsystem an `app_error` originated in. */
 export const ErrorSubsystem = z.enum([
@@ -258,10 +258,12 @@ export type RendererTrackInput = z.infer<typeof RendererTrackInput>;
 
 // ---- categorical normalizers (call sites pass raw values through these) ----
 
-/** equity vs option, from the Robinhood order tool name. */
+/** equity/option/crypto, from the Robinhood order tool name. `_option` deliberately
+ *  has no trailing underscore so `exercise_option`/`cancel_option_exercise` count too. */
 export function assetTypeOf(toolName: string): z.infer<typeof assetType> {
   if (/_equity_/.test(toolName)) return "equity";
-  if (/_option_/.test(toolName)) return "option";
+  if (/_option/.test(toolName)) return "option";
+  if (/_crypto_/.test(toolName)) return "crypto";
   return "other";
 }
 
@@ -277,9 +279,11 @@ export function orderTypeOf(type: string | null | undefined): z.infer<typeof ord
   return t === "market" || t === "limit" ? t : "other";
 }
 
-/** place vs cancel from a parsed order kind. */
+/** place / cancel / exercise from a parsed order kind (anything else counts as place). */
 export function orderKindOf(kind: string | null | undefined): z.infer<typeof orderKind> {
-  return kind === "cancel" ? "cancel" : "place";
+  if (kind === "cancel") return "cancel";
+  if (kind === "exercise") return "exercise";
+  return "place";
 }
 
 /** Normalize a template id to the allowlist (unknown → "other"). */
