@@ -1,5 +1,6 @@
 import type { AuditEntry, ParsedOrder } from "@shared/approval";
 import type { OrderStatus } from "@shared/broker";
+import { legsLabel, STANDARD_MULTIPLIER } from "@shared/options";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useActivity } from "../../hooks/useActivity";
@@ -358,7 +359,10 @@ interface HeaderView {
 /**
  * The executed cost line from RH's live `OrderStatus`: real cumulative shares @
  * VWAP, never a placement estimate — so a not-yet-filled order shows no numbers.
- * Buy spends cash (−), sell returns cash (+). Shared by group + external rows.
+ * Buy spends cash (−), sell returns cash (+). An option order counts contracts at
+ * a per-share price, so the cost carries the multiplier (`1 contract at $0.79` →
+ * `-$79.00`); a spread's net debit/credit takes the sign from its direction.
+ * Shared by group + external rows.
  */
 function executedNumbers(
   status: OrderStatus | null,
@@ -367,9 +371,24 @@ function executedNumbers(
   const qty = status?.cumulativeQuantity ?? null;
   const price = status?.avgPrice ?? null;
   if (qty != null && qty > 0 && price != null) {
-    const cost = qty * price;
-    const total = signedUsd(side === "buy" ? -cost : cost);
-    const breakdown = `${num(qty, 3)} ${qty === 1 ? "share" : "shares"} at ${usd(price)}`;
+    const isOption = status?.assetType === "option";
+    const isCrypto = status?.assetType === "crypto";
+    const mult = isOption ? (status?.multiplier ?? STANDARD_MULTIPLIER) : 1;
+    const cost = qty * price * mult;
+    const pays = side === "buy" || side === "debit";
+    const total = signedUsd(pays ? -cost : cost);
+    // Units: contracts for options, the asset code for crypto (never "shares" for
+    // coins — RH's own rule), shares otherwise. Coin quantities need more precision.
+    const unit = isOption
+      ? qty === 1
+        ? "contract"
+        : "contracts"
+      : isCrypto
+        ? (status?.symbol ?? "")
+        : qty === 1
+          ? "share"
+          : "shares";
+    const breakdown = `${num(qty, isCrypto ? 8 : 3)} ${unit} at ${usd(price)}`.trim();
     return { total, breakdown };
   }
   return { total: null, breakdown: null };
@@ -391,7 +410,9 @@ function headerView(group: ActivityGroup, status: OrderStatus | null): HeaderVie
 
   if (parsed && parsed.kind === "place") {
     const isLimit = parsed.orderType === "limit" && parsed.limitPrice != null;
-    const action = `${(parsed.side ?? "order").toUpperCase()} ${parsed.symbol ?? "?"} @ ${
+    // An option names its contract (`TLT $86C 11/20/26`) where an equity shows its symbol.
+    const name = parsed.instrument ?? parsed.symbol ?? "?";
+    const action = `${(parsed.side ?? "order").toUpperCase()} ${name} @ ${
       isLimit ? usd(parsed.limitPrice) : "Market"
     }`;
     return { primary: action, ...executedNumbers(status, parsed.side ?? null) };
@@ -403,7 +424,9 @@ function headerView(group: ActivityGroup, status: OrderStatus | null): HeaderVie
 /** Header for an external order, built straight from RH's `OrderStatus`. */
 function externalView(status: OrderStatus): HeaderView {
   const isLimit = status.type === "limit" && status.limitPrice != null;
-  const action = `${(status.side ?? "order").toUpperCase()} ${status.symbol ?? "?"} @ ${
+  const name =
+    status.assetType === "option" ? legsLabel(status.legs ?? []) : (status.symbol ?? "?");
+  const action = `${(status.side ?? "order").toUpperCase()} ${name} @ ${
     isLimit ? usd(status.limitPrice) : "Market"
   }`;
   return { primary: action, ...executedNumbers(status, status.side) };

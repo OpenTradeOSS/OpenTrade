@@ -11,6 +11,7 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { GATED_TOOL_MATCHER, PREALLOWED_TOOL_PATTERNS } from "@shared/robinhood-tools";
 import { resolveHooksDir } from "../agents/paths";
 import { claudeConfigHasRobinhood } from "./robinhood-mcp";
 import type { Harness, ProbeResult, SessionMode } from "./types";
@@ -19,9 +20,11 @@ const execFileAsync = promisify(execFile);
 
 /**
  * The agent-dir `.claude/settings.json` that wires Claude Code's order gate: the
- * PreToolUse hook on the four order tools (→ `approval-gate.sh`, the approval card),
+ * PreToolUse hook on the money-moving tools (→ `approval-gate.sh`, the approval card),
  * the PostToolUse order-result capture, and the Notification/Stop status hooks, plus
- * the read-only-tool allowlist. Generated IN CODE (not copied from the template): the
+ * the allowlist for reads and cosmetic writes. The matcher and allowlist derive from
+ * the classification table in `@shared/robinhood-tools` — the single place the gated
+ * set is maintained. Generated IN CODE (not copied from the template): the
  * template's `.claude/settings.json` is git-untracked (`.claude/` is gitignored), so a
  * clean CI release build never bundles it and a template-copy scaffold leaves the agent
  * UNGATED. Emitting it here — and re-emitting before every spawn — makes the gate
@@ -34,18 +37,13 @@ const CLAUDE_SETTINGS_JSON = `${JSON.stringify(
     $schema: "https://json.schemastore.org/claude-code-settings.json",
     enabledMcpjsonServers: ["robinhood", "opentrade"],
     permissions: {
-      allow: [
-        "mcp__robinhood__get_*",
-        "mcp__robinhood__search",
-        "mcp__robinhood__review_*",
-        "mcp__opentrade__*",
-      ],
+      allow: [...PREALLOWED_TOOL_PATTERNS, "mcp__opentrade__*"],
       deny: [],
     },
     hooks: {
       PreToolUse: [
         {
-          matcher: "mcp__robinhood__(place|cancel)_(equity|option)_order",
+          matcher: GATED_TOOL_MATCHER,
           hooks: [
             {
               type: "command",
@@ -57,7 +55,7 @@ const CLAUDE_SETTINGS_JSON = `${JSON.stringify(
       ],
       PostToolUse: [
         {
-          matcher: "mcp__robinhood__(place|cancel)_(equity|option)_order",
+          matcher: GATED_TOOL_MATCHER,
           hooks: [
             { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/order-result.sh" },
           ],

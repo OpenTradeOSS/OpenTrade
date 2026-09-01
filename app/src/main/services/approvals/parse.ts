@@ -1,4 +1,10 @@
 import type { OrderOutcome, ParsedOrder } from "@shared/approval";
+import {
+  legsLabel,
+  type OptionContract,
+  type OptionLeg,
+  STANDARD_MULTIPLIER,
+} from "@shared/options";
 
 /**
  * Best-effort parse of a Robinhood order tool's `tool_input` into a human card.
@@ -8,7 +14,13 @@ import type { OrderOutcome, ParsedOrder } from "@shared/approval";
  */
 export function parseOrderInput(toolName: string, input: unknown): ParsedOrder {
   const o = (input ?? {}) as Record<string, unknown>;
+  // Exercise first: `cancel_option_exercise` would otherwise trip the generic
+  // cancel branch, which expects an order_id it doesn't have (it targets an
+  // option_id — exercises aren't orders and never appear in the order ledger).
+  if (/exercise/.test(toolName)) return parseExercise(toolName, o);
   const isCancel = /cancel_/.test(toolName);
+  const isOption = /_option_/.test(toolName) || Array.isArray(o.legs);
+  const isCrypto = /_crypto_/.test(toolName);
 
   if (isCancel) {
     const orderId = str(pick(o, "order_id", "id", "orderId"));
@@ -22,14 +34,23 @@ export function parseOrderInput(toolName: string, input: unknown): ParsedOrder {
       estCost: null,
       cancelsOrderId: orderId,
       summary: orderId ? `Cancel order ${orderId}` : "Cancel order",
+      ...(isOption ? { assetType: "option" as const } : {}),
+      ...(isCrypto ? { assetType: "crypto" as const } : {}),
     };
   }
 
-  const symbol = up(str(pick(o, "symbol", "ticker", "instrument")));
+  if (isOption) return parseOptionOrder(o);
+
+  // Equity and crypto orders share a flat shape (symbol/side/type/quantity or a
+  // dollar notional). Crypto extras: the symbol may be a pair ("BTC-USD" → "BTC"),
+  // quantities are coins, and `stop_loss` is what equities call `stop_market`.
+  const rawSymbol = up(str(pick(o, "symbol", "ticker", "instrument")));
+  const symbol = isCrypto && rawSymbol ? rawSymbol.replace(/-?USD$/, "") : rawSymbol;
   const side = low(str(pick(o, "side", "direction")));
   const quantity = numv(pick(o, "quantity", "qty", "shares", "amount_in_shares"));
   const orderType = low(str(pick(o, "type", "order_type", "orderType"))) ?? inferType(o);
   const limitPrice = numv(pick(o, "limit_price", "limitPrice", "price"));
+  const stopPrice = numv(pick(o, "stop_price", "stopPrice"));
   const dollars = numv(pick(o, "amount", "dollar_amount", "amount_in_dollars", "notional"));
 
   let estCost: number | null = null;
@@ -45,8 +66,248 @@ export function parseOrderInput(toolName: string, input: unknown): ParsedOrder {
     limitPrice,
     estCost,
     cancelsOrderId: null,
-    summary: placeSummary({ side, quantity, symbol, orderType, limitPrice, dollars, estCost }),
+    summary: placeSummary({
+      side,
+      quantity,
+      symbol,
+      orderType,
+      limitPrice,
+      stopPrice,
+      dollars,
+      estCost,
+    }),
+    ...(isCrypto ? { assetType: "crypto" as const, stopPrice } : {}),
   };
+}
+
+/**
+ * An option order's `tool_input` (`place_option_order`). Unlike an equity order it
+ * names no symbol: each leg carries only an `option_id` UUID, the price is per
+ * share and `quantity` counts contracts. The contract's identity (underlying,
+ * expiry, strike, call/put) is filled in afterwards by `enrichOptionParsed`, once
+ * the gate has resolved the ids — so this first pass renders `BUY 1 option to open
+ * @ $0.79 limit`, and the enriched card `BUY 1 TLT $86C 11/20/26 to open …`.
+ *
+ * Field shapes verified against the live tool schema (2026-08-27): `legs[]
+ * {option_id, side, position_effect, ratio_quantity?}`, `quantity`, `type`
+ * (limit default), `price`, `stop_price`, `direction` (multi-leg), `time_in_force`.
+ */
+function parseOptionOrder(o: Record<string, unknown>): ParsedOrder {
+  const rawLegs = Array.isArray(o.legs) ? (o.legs as unknown[]) : [];
+  const legs: OptionLeg[] = rawLegs.map((raw) => {
+    const l = (raw ?? {}) as Record<string, unknown>;
+    return {
+      optionId: str(pick(l, "option_id", "optionId", "id")) ?? "",
+      side: low(str(pick(l, "side"))),
+      positionEffect: low(str(pick(l, "position_effect", "positionEffect"))),
+      ratioQuantity: numv(pick(l, "ratio_quantity", "ratioQuantity")) ?? 1,
+      contract: null,
+    };
+  });
+  const quantity = numv(pick(o, "quantity", "qty"));
+  // RH defaults `type` to limit; a bare `price` means the same.
+  const orderType =
+    low(str(pick(o, "type", "order_type", "orderType"))) ??
+    (pick(o, "price", "limit_price") != null ? "limit" : null);
+  const limitPrice = numv(pick(o, "price", "limit_price", "limitPrice"));
+  const stopPrice = numv(pick(o, "stop_price", "stopPrice"));
+  // One leg: its side is the order's side. A spread only has a net direction
+  // (debit = you pay, credit = you receive), which stands in as the verb.
+  const direction =
+    low(str(pick(o, "direction"))) ??
+    (legs.length === 1 && legs[0].side ? (legs[0].side === "sell" ? "credit" : "debit") : null);
+  const side = legs.length === 1 ? legs[0].side : direction;
+  return buildOptionParsed({ legs, quantity, orderType, limitPrice, stopPrice, direction, side });
+}
+
+/**
+ * `exercise_option` / `cancel_option_exercise`. Not orders: the input names a
+ * position's contract by `option_id` (+ integer `quantity` for the exercise
+ * itself; the cancel targets every queued exercise on that contract). A call
+ * exercise buys `quantity × multiplier` shares at the strike, so once the
+ * contract resolves the est. cost is `strike × multiplier × quantity` (a put
+ * delivers shares instead — no cash estimate). `allow_shorts` on a put is a
+ * risk flag worth keeping on the card.
+ */
+function parseExercise(toolName: string, o: Record<string, unknown>): ParsedOrder {
+  const optionId = str(pick(o, "option_id", "optionId")) ?? "";
+  const legs: OptionLeg[] = optionId
+    ? [{ optionId, side: null, positionEffect: null, ratioQuantity: 1, contract: null }]
+    : [];
+  return buildExerciseParsed({
+    cancel: /cancel_/.test(toolName),
+    legs,
+    quantity: numv(pick(o, "quantity")),
+    allowShorts: pick(o, "allow_shorts", "allowShorts") === true,
+  });
+}
+
+/** Suffix marking `allow_shorts` on an exercise summary (also how enrichment re-detects it). */
+const ALLOW_SHORTS_NOTE = " — may short shares to deliver";
+
+function buildExerciseParsed(a: {
+  cancel: boolean;
+  legs: OptionLeg[];
+  quantity: number | null;
+  allowShorts: boolean;
+}): ParsedOrder {
+  const contract = a.legs[0]?.contract ?? null;
+  const instrument = legsLabel(a.legs);
+  const multiplier = contract?.multiplier ?? STANDARD_MULTIPLIER;
+  // Cash needed to exercise a call: buy quantity × multiplier shares at the strike.
+  const estCost =
+    !a.cancel &&
+    contract?.optionType === "call" &&
+    contract.strikePrice != null &&
+    a.quantity != null
+      ? contract.strikePrice * multiplier * a.quantity
+      : null;
+  const size = a.quantity != null ? `${trimNum(a.quantity)} ` : "";
+  const summary = a.cancel
+    ? `Cancel exercise of ${instrument}`
+    : `EXERCISE ${size}${instrument}${estCost != null ? ` — est. ${usd(estCost)} to buy shares` : ""}${
+        a.allowShorts ? ALLOW_SHORTS_NOTE : ""
+      }`;
+  return {
+    kind: a.cancel ? "cancel" : "exercise",
+    symbol: up(contract?.chainSymbol ?? null),
+    side: null,
+    quantity: a.quantity,
+    orderType: a.cancel ? "cancel" : "exercise",
+    limitPrice: null,
+    estCost,
+    cancelsOrderId: null,
+    summary,
+    assetType: "option",
+    instrument,
+    legs: a.legs,
+    multiplier,
+    direction: null,
+    stopPrice: null,
+  };
+}
+
+/**
+ * Fill in the contracts behind an option order's legs (from the broker's
+ * `option_id` → contract map) and recompute everything that depends on them: the
+ * underlying, the instrument label, the multiplier, the est. cost, the summary.
+ * Covers placed orders and exercises/exercise-cancels (an ordinary order-cancel
+ * has no legs and enriches from the ledger instead). Ids the map doesn't know
+ * keep a null contract; a non-option order is untouched.
+ */
+export function enrichOptionParsed(
+  parsed: ParsedOrder,
+  contracts: Map<string, OptionContract>,
+): ParsedOrder {
+  if (parsed.assetType !== "option" || !parsed.legs?.length) return parsed;
+  const legs = parsed.legs.map((l) => ({
+    ...l,
+    contract: contracts.get(l.optionId) ?? l.contract,
+  }));
+  if (parsed.kind === "exercise" || (parsed.kind === "cancel" && parsed.orderType === "cancel")) {
+    if (parsed.kind === "cancel" && !parsed.summary.startsWith("Cancel exercise")) return parsed;
+    return buildExerciseParsed({
+      cancel: parsed.kind === "cancel",
+      legs,
+      quantity: parsed.quantity,
+      // ParsedOrder carries no allow_shorts field; the parse-time summary does.
+      allowShorts: parsed.summary.includes(ALLOW_SHORTS_NOTE),
+    });
+  }
+  if (parsed.kind !== "place") return parsed;
+  return {
+    ...parsed,
+    ...buildOptionParsed({
+      legs,
+      quantity: parsed.quantity,
+      orderType: parsed.orderType,
+      limitPrice: parsed.limitPrice,
+      stopPrice: parsed.stopPrice ?? null,
+      direction: parsed.direction ?? null,
+      side: parsed.side,
+    }),
+  };
+}
+
+function buildOptionParsed(a: {
+  legs: OptionLeg[];
+  quantity: number | null;
+  orderType: string | null;
+  limitPrice: number | null;
+  stopPrice: number | null;
+  direction: string | null;
+  side: string | null;
+}): ParsedOrder {
+  const known = a.legs.find((l) => l.contract);
+  const multiplier = known?.contract?.multiplier ?? STANDARD_MULTIPLIER;
+  const symbol = up(known?.contract?.chainSymbol ?? null);
+  const instrument = legsLabel(a.legs);
+  // Per-share limit × multiplier × contracts: the dollars the order actually moves
+  // ($0.79 × 100 × 1 = $79). Only a priced order has an estimate.
+  const priced = a.orderType === "limit" || a.orderType === "stop_limit";
+  const estCost =
+    priced && a.limitPrice != null && a.quantity != null
+      ? a.limitPrice * multiplier * a.quantity
+      : null;
+  return {
+    kind: "place",
+    symbol,
+    side: a.side,
+    quantity: a.quantity,
+    orderType: a.orderType,
+    limitPrice: a.limitPrice,
+    estCost,
+    cancelsOrderId: null,
+    summary: optionSummary({ ...a, instrument, estCost }),
+    assetType: "option",
+    instrument,
+    legs: a.legs,
+    multiplier,
+    direction: a.direction,
+    stopPrice: a.stopPrice,
+  };
+}
+
+/**
+ * `BUY 1 TLT $86C 11/20/26 to open @ $0.79 limit — est. $79.00`;
+ * `DEBIT 2 TLT 2-leg spread @ $1.20 net limit — est. $240.00`;
+ * `SELL 1 TLT $86C 11/20/26 to close @ market (stop $0.50)`.
+ */
+function optionSummary(a: {
+  legs: OptionLeg[];
+  quantity: number | null;
+  orderType: string | null;
+  limitPrice: number | null;
+  stopPrice: number | null;
+  side: string | null;
+  instrument: string;
+  estCost: number | null;
+}): string {
+  const verb = a.side ? a.side.toUpperCase() : "ORDER";
+  const size = a.quantity != null ? `${trimNum(a.quantity)} ` : "";
+  const effect =
+    a.legs.length === 1 && a.legs[0].positionEffect ? ` to ${a.legs[0].positionEffect}` : "";
+  const net = a.legs.length > 1 ? " net" : "";
+  let price: string;
+  switch (a.orderType) {
+    case "limit":
+      price = a.limitPrice != null ? `@ ${usd(a.limitPrice)}${net} limit` : "@ limit";
+      break;
+    case "stop_limit":
+      price = `@ ${a.limitPrice != null ? usd(a.limitPrice) : "?"} stop-limit${stopClause(a.stopPrice)}`;
+      break;
+    case "stop_market":
+      price = `@ market${stopClause(a.stopPrice)}`;
+      break;
+    default:
+      price = "@ market";
+  }
+  const est = a.estCost != null ? ` — est. ${usd(a.estCost)}` : "";
+  return `${verb} ${size}${a.instrument}${effect} ${price}${est}`.replace(/\s+/g, " ").trim();
+}
+
+function stopClause(stop: number | null): string {
+  return stop != null ? ` (stop ${usd(stop)})` : "";
 }
 
 /**
@@ -54,7 +315,9 @@ export function parseOrderInput(toolName: string, input: unknown): ParsedOrder {
  * tool call only carries the target order id, so on its own it reads as a bare
  * uuid ("Cancel order <uuid>"). Resolving that id against the broker's cached
  * ledger (which includes orders placed manually in the Robinhood app, not just
- * agent-placed ones) lets us render the real order — "Cancel BUY $5 of NET".
+ * agent-placed ones) lets us render the real order — "Cancel BUY $5 of NET". For
+ * an option order `instrument` names the contract (`TLT $86C 11/20/26`) and
+ * `multiplier` scales the per-share limit into dollars.
  */
 export interface CancelTarget {
   symbol: string | null;
@@ -63,6 +326,9 @@ export interface CancelTarget {
   orderType: string | null;
   limitPrice: number | null;
   dollarAmount: number | null;
+  assetType?: "equity" | "option" | "crypto";
+  instrument?: string | null;
+  multiplier?: number | null;
 }
 
 /**
@@ -74,14 +340,17 @@ export interface CancelTarget {
  */
 export function enrichCancelParsed(parsed: ParsedOrder, target: CancelTarget | null): ParsedOrder {
   if (parsed.kind !== "cancel" || !target) return parsed;
+  const isOption = target.assetType === "option";
   const symbol = up(target.symbol);
   const side = low(target.side);
   const quantity = target.quantity && target.quantity > 0 ? target.quantity : null;
   const orderType = low(target.orderType);
   const limitPrice = target.limitPrice ?? null;
   const dollars = target.dollarAmount ?? null;
+  const multiplier = isOption ? (target.multiplier ?? STANDARD_MULTIPLIER) : 1;
   const estCost =
-    limitPrice != null && quantity != null ? limitPrice * quantity : (dollars ?? null);
+    limitPrice != null && quantity != null ? limitPrice * multiplier * quantity : (dollars ?? null);
+  const instrument = isOption ? (target.instrument ?? "option") : null;
   return {
     ...parsed,
     symbol: symbol ?? parsed.symbol,
@@ -90,19 +359,28 @@ export function enrichCancelParsed(parsed: ParsedOrder, target: CancelTarget | n
     orderType: orderType ?? parsed.orderType,
     limitPrice,
     estCost,
-    summary: cancelSummary({ side, quantity, symbol, orderType, limitPrice, dollars }),
+    summary: cancelSummary({
+      side,
+      quantity,
+      name: instrument ?? symbol,
+      orderType,
+      limitPrice,
+      dollars,
+    }),
+    ...(isOption ? { assetType: "option" as const, instrument, multiplier } : {}),
   };
 }
 
 function cancelSummary(a: {
   side: string | null;
   quantity: number | null;
-  symbol: string | null;
+  /** What's being cancelled: the symbol, or an option's contract label. */
+  name: string | null;
   orderType: string | null;
   limitPrice: number | null;
   dollars: number | null;
 }): string {
-  if (!a.symbol) return "Cancel order";
+  if (!a.name) return "Cancel order";
   const verb = a.side ? a.side.toUpperCase() : "";
   const size =
     a.quantity != null
@@ -112,7 +390,7 @@ function cancelSummary(a: {
         : "";
   const price =
     a.orderType === "limit" && a.limitPrice != null ? ` @ ${usd(a.limitPrice)} limit` : "";
-  return `Cancel ${verb} ${size}${a.symbol}${price}`.replace(/\s+/g, " ").trim();
+  return `Cancel ${verb} ${size}${a.name}${price}`.replace(/\s+/g, " ").trim();
 }
 
 function placeSummary(a: {
@@ -121,6 +399,7 @@ function placeSummary(a: {
   symbol: string | null;
   orderType: string | null;
   limitPrice: number | null;
+  stopPrice?: number | null;
   dollars: number | null;
   estCost: number | null;
 }): string {
@@ -132,8 +411,22 @@ function placeSummary(a: {
         ? `${usd(a.dollars)} of `
         : "";
   const sym = a.symbol ?? "?";
-  const price =
-    a.orderType === "limit" && a.limitPrice != null ? `@ ${usd(a.limitPrice)} limit` : "@ market";
+  let price: string;
+  switch (a.orderType) {
+    case "limit":
+      price = a.limitPrice != null ? `@ ${usd(a.limitPrice)} limit` : "@ limit";
+      break;
+    case "stop_limit":
+      price = `@ ${a.limitPrice != null ? usd(a.limitPrice) : "?"} stop-limit${stopClause(a.stopPrice ?? null)}`;
+      break;
+    // Crypto names the stop-triggered market order `stop_loss`; equities `stop_market`.
+    case "stop_loss":
+    case "stop_market":
+      price = `@ market${stopClause(a.stopPrice ?? null)}`;
+      break;
+    default:
+      price = "@ market";
+  }
   const est = a.estCost != null && a.quantity != null ? ` — est. ${usd(a.estCost)}` : "";
   return `${verb} ${size}${sym} ${price}${est}`.replace(/\s+/g, " ").trim();
 }

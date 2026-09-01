@@ -35,6 +35,7 @@ const BIND_RETRY_MS = 300;
  * - Market-data faucet (M2): a pull-through cache over the broker so agents'
  *   Monitor watch-scripts can poll prices/positions without hammering Robinhood:
  *     GET /quotes/:symbol?maxAge=5   GET /positions?maxAge=30
+ *     GET /option-positions?maxAge=30   GET /crypto-positions?maxAge=30
  * - Hook endpoints (M3): the PreToolUse approval gate and the Notification/Stop
  *   status feed, called by the scaffolded hook scripts in each agent folder:
  *     POST /hook/pretool-approval   POST /hook/status
@@ -158,6 +159,14 @@ export class LocalApiServer {
     if (url.pathname === "/positions") {
       const maxAge = (Number(url.searchParams.get("maxAge")) || 30) * 1000;
       return json(res, 200, await this.broker.getPositionsLive(maxAge));
+    }
+    if (url.pathname === "/option-positions") {
+      const maxAge = (Number(url.searchParams.get("maxAge")) || 30) * 1000;
+      return json(res, 200, await this.broker.getOptionPositionsLive(maxAge));
+    }
+    if (url.pathname === "/crypto-positions") {
+      const maxAge = (Number(url.searchParams.get("maxAge")) || 30) * 1000;
+      return json(res, 200, await this.broker.getCryptoPositionsLive(maxAge));
     }
     return json(res, 404, { error: "not found" });
   }

@@ -132,3 +132,65 @@ describe("orderNotification", () => {
     expect(n.body).toBe("BUY 0.880592 AAPL — filled at $85.18");
   });
 });
+
+describe("orderNotification — options", () => {
+  const tltFill = order({
+    id: "o1",
+    assetType: "option",
+    symbol: "TLT",
+    side: "buy",
+    type: "limit",
+    state: "filled",
+    quantity: 1,
+    cumulativeQuantity: 1,
+    avgPrice: 0.79,
+    limitPrice: 0.79,
+    multiplier: 100,
+    legs: [
+      {
+        optionId: "x",
+        side: "buy",
+        positionEffect: "open",
+        ratioQuantity: 1,
+        contract: {
+          optionId: "x",
+          chainSymbol: "TLT",
+          expirationDate: "2026-11-20",
+          strikePrice: 86,
+          optionType: "call",
+          multiplier: 100,
+        },
+      },
+    ],
+  });
+
+  test("a fill names the contract and the per-contract cost (price × multiplier)", () => {
+    const n = orderNotification(tltFill, "citrini");
+    expect(n.title).toBe("citrini — Order filled");
+    expect(n.body).toBe("BUY 1 TLT $86C 11/20/26 — filled at $79");
+  });
+
+  test("a rejected option order carries no price", () => {
+    const n = orderNotification({ ...tltFill, state: "rejected", avgPrice: null }, null);
+    expect(n.body).toBe("BUY 1 TLT $86C 11/20/26 — rejected");
+  });
+});
+
+describe("orderNotification — crypto", () => {
+  test("coin quantities keep 8 decimals — a 1-satoshi fill is not rounded to 0", () => {
+    const n = orderNotification(
+      order({
+        id: "c1",
+        assetType: "crypto",
+        symbol: "BTC",
+        side: "buy",
+        state: "filled",
+        quantity: 0.00000001,
+        cumulativeQuantity: 0.00000001,
+        avgPrice: 78691.76,
+      }),
+      null,
+    );
+    expect(n.body).toBe("BUY 0.00000001 BTC — filled at $78691.76");
+  });
+});

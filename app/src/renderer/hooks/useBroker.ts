@@ -12,16 +12,20 @@ export function useBrokerStatus() {
   return query.data;
 }
 
-/** Portfolio + positions, invalidated whenever the poller updates the cache. */
+/** Portfolio + positions (equity and option), invalidated whenever the poller updates the cache. */
 export function useBrokerData() {
   const utils = trpc.useUtils();
   const portfolio = trpc.broker.portfolio.useQuery();
   const positions = trpc.broker.positions.useQuery();
+  const optionPositions = trpc.broker.optionPositions.useQuery();
+  const cryptoPositions = trpc.broker.cryptoPositions.useQuery();
 
   trpc.broker.onUpdated.useSubscription(undefined, {
     onData: () => {
       utils.broker.portfolio.invalidate();
       utils.broker.positions.invalidate();
+      utils.broker.optionPositions.invalidate();
+      utils.broker.cryptoPositions.invalidate();
     },
   });
 
@@ -31,7 +35,12 @@ export function useBrokerData() {
     return () => clearInterval(t);
   }, [utils]);
 
-  return { portfolio: portfolio.data, positions: positions.data };
+  return {
+    portfolio: portfolio.data,
+    positions: positions.data,
+    optionPositions: optionPositions.data,
+    cryptoPositions: cryptoPositions.data,
+  };
 }
 
 /**

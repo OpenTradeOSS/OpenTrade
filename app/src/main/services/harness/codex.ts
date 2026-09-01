@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import type { Agent } from "@shared/agent";
+import { GATED_TOOL_MATCHER, GATED_TOOLS } from "@shared/robinhood-tools";
 import { OPENTRADE_HOME } from "../../db/client";
 import { hostLog } from "../../host/log";
 import { resolveAgentMcp, resolveHooksDir } from "../agents/paths";
@@ -24,16 +25,6 @@ import { codexConfigHasRobinhood, ROBINHOOD_MCP_URL } from "./robinhood-mcp";
 import type { Harness, ProbeResult, SessionMode } from "./types";
 
 const execFileAsync = promisify(execFile);
-/** The four order-placing tools gated by the approval anchor + the hook matcher.
- *  Single source for the codex side of the gate surface (the claude template's
- *  settings.json carries the equivalent matcher as a static string). */
-export const ORDER_TOOLS = [
-  "place_equity_order",
-  "place_option_order",
-  "cancel_equity_order",
-  "cancel_option_order",
-] as const;
-export const ORDER_TOOL_MATCHER = "mcp__robinhood__(place|cancel)_(equity|option)_order";
 
 /** Env keys stripped from a codex background run when subscription auth is enforced
  *  (single source — referenced by both the harness field and the server-env builder
@@ -85,8 +76,9 @@ function surfaceSessionSplit(agent: Agent, detail: string): void {
  * silently drops the TUI into its embedded engine, splitting the session.
  *
  * The order gate is layered fail-closed (spike-verified):
- *  - anchor: `approval_mode = "prompt"` on the four order tools in the generated
- *    config.toml — codex core raises an elicitation the backend answers through
+ *  - anchor: `approval_mode = "prompt"` on every money-moving tool (the
+ *    `@shared/robinhood-tools` table) in the generated config.toml — codex core
+ *    raises an elicitation the backend answers through
  *    ApprovalService; no answer / client error / disconnect = Decline.
  *    (`"approve"` means PRE-approved in codex — never use it for order tools.)
  *  - redundancy: the same approval-gate.sh PreToolUse hook as claude (codex
@@ -249,7 +241,7 @@ export function createCodexHarness(manager: CodexAppServerManager): Harness {
         hooks: {
           PreToolUse: [
             {
-              matcher: ORDER_TOOL_MATCHER,
+              matcher: GATED_TOOL_MATCHER,
               hooks: [
                 {
                   type: "command",
@@ -261,7 +253,7 @@ export function createCodexHarness(manager: CodexAppServerManager): Harness {
           ],
           PostToolUse: [
             {
-              matcher: ORDER_TOOL_MATCHER,
+              matcher: GATED_TOOL_MATCHER,
               hooks: [
                 {
                   type: "command",
@@ -339,7 +331,7 @@ trust_level = "trusted"
 url = "${ROBINHOOD_MCP_URL}"
 default_tools_approval_mode = "approve"
 
-${ORDER_TOOLS.map((t) => `[mcp_servers.robinhood.tools.${t}]\napproval_mode = "prompt"`).join(
+${GATED_TOOLS.map((t) => `[mcp_servers.robinhood.tools.${t}]\napproval_mode = "prompt"`).join(
   "\n\n",
 )}
 

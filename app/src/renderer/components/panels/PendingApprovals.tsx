@@ -1,4 +1,5 @@
 import type { Approval } from "@shared/approval";
+import { contractLabel, legActionLabel } from "@shared/options";
 import { Check, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useApprovals } from "../../hooks/useApprovals";
@@ -45,6 +46,18 @@ function PendingCard({ approval }: { approval: Approval }) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-medium">{approval.parsed?.summary ?? approval.toolName}</div>
+          {/* A spread's summary names only the underlying + leg count; list the legs. */}
+          {(approval.parsed?.legs?.length ?? 0) > 1 && (
+            <ul className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
+              {approval.parsed?.legs?.map((leg) => (
+                <li key={leg.optionId}>
+                  {legActionLabel(leg.side, leg.positionEffect)}{" "}
+                  {leg.ratioQuantity && leg.ratioQuantity > 1 ? `${leg.ratioQuantity}× ` : ""}
+                  {contractLabel(leg.contract)}
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="mt-0.5 text-[11px] text-muted-foreground">
             {approval.agentName ?? "agent"} · {approval.toolName}
           </div>

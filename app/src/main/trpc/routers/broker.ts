@@ -12,6 +12,8 @@ export const brokerRouter = router({
 
   portfolio: publicProcedure.query(({ ctx }) => ctx.broker.getCachedPortfolio()),
   positions: publicProcedure.query(({ ctx }) => ctx.broker.getCachedPositions()),
+  optionPositions: publicProcedure.query(({ ctx }) => ctx.broker.getCachedOptionPositions()),
+  cryptoPositions: publicProcedure.query(({ ctx }) => ctx.broker.getCachedCryptoPositions()),
   /** The agentic order ledger from RH — source of truth for execution status. */
   agenticOrders: publicProcedure.query(({ ctx }) => ctx.broker.getAgenticOrdersCached()),
 

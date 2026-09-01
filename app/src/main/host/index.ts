@@ -103,6 +103,8 @@ async function main() {
   approvals.setOrderResolver(
     (orderId) => broker.getAgenticOrdersCached()?.value.find((o) => o.id === orderId) ?? null,
   );
+  // Same reverse link for option orders: turn the legs' contract ids into contracts.
+  approvals.setContractResolver((ids) => broker.resolveOptionContracts(ids));
 
   // Stable endpoint: home-derived faucet port + persisted token, shared by the
   // faucet/gate, the terminal WS, and the tRPC server.

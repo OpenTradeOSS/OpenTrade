@@ -270,11 +270,15 @@ describe("analytics allowlist + normalizers", () => {
     expect(sideOf(null)).toBe("other");
     expect(assetTypeOf("mcp__robinhood__place_option_order")).toBe("option");
     expect(assetTypeOf("mcp__robinhood__place_equity_order")).toBe("equity");
+    expect(assetTypeOf("mcp__robinhood__place_crypto_order")).toBe("crypto");
+    expect(assetTypeOf("mcp__robinhood__exercise_option")).toBe("option");
+    expect(assetTypeOf("mcp__robinhood__cancel_option_exercise")).toBe("option");
     expect(assetTypeOf("something_else")).toBe("other");
     expect(orderTypeOf("LIMIT")).toBe("limit");
     expect(orderTypeOf("stop")).toBe("other");
     expect(orderKindOf("cancel")).toBe("cancel");
     expect(orderKindOf("place")).toBe("place");
+    expect(orderKindOf("exercise")).toBe("exercise");
     expect(templateOf("momentum")).toBe("momentum");
     expect(templateOf("custom-thing")).toBe("other");
   });

@@ -1,4 +1,15 @@
-import type { Account, OrderStatus, Portfolio, Position, Quote } from "@shared/broker";
+import type {
+  Account,
+  CryptoPosition,
+  CryptoQuote,
+  OptionContract,
+  OptionPosition,
+  OptionQuote,
+  OrderStatus,
+  Portfolio,
+  Position,
+  Quote,
+} from "@shared/broker";
 
 /** MCP server entry the app writes into agents' .mcp.json. */
 export interface McpServerConfig {
@@ -59,8 +70,31 @@ export interface BrokerAdapter {
   /** Single-order lookup by id (resolves orders aged out of the ledger window). */
   getOrder(accountNumber: string, orderId: string): Promise<OrderStatus | null>;
   getQuotes(symbols: string[]): Promise<Quote[]>;
-  /** Tool names that place/cancel orders — feeds the approval-gate hook matcher. */
-  orderToolNames(): string[];
+
+  // ---- options (optional: a broker without an options API simply has none) ----
+
+  /** The option order ledger, same contract as `getAgenticOrders`. */
+  getOptionOrders?(
+    accountNumber: string,
+    opts?: { createdAtGte?: string; cursor?: string },
+  ): Promise<{ orders: OrderStatus[]; cursor: string | null }>;
+  getOptionOrder?(accountNumber: string, orderId: string): Promise<OrderStatus | null>;
+  /** Open (non-zero) option positions. */
+  getOptionPositions?(accountNumber: string): Promise<OptionPosition[]>;
+  /** Resolve contract ids to their identity (underlying / expiry / strike / type). */
+  getOptionContracts?(optionIds: string[]): Promise<OptionContract[]>;
+  getOptionQuotes?(optionIds: string[]): Promise<OptionQuote[]>;
+
+  // ---- crypto (optional, same convention; keyed by the numeric rhs account) ----
+
+  getCryptoOrders?(
+    rhsAccountNumber: string,
+    opts?: { createdAtGte?: string; cursor?: string },
+  ): Promise<{ orders: OrderStatus[]; cursor: string | null }>;
+  getCryptoOrder?(rhsAccountNumber: string, orderId: string): Promise<OrderStatus | null>;
+  getCryptoPositions?(rhsAccountNumber: string): Promise<CryptoPosition[]>;
+  /** Quotes by pair symbol ("BTC-USD"); results come back unhyphenated ("BTCUSD"). */
+  getCryptoQuotes?(pairSymbols: string[]): Promise<CryptoQuote[]>;
   /** What to write into an agent's .mcp.json. */
   mcpServerConfig(): { name: string; config: McpServerConfig };
 }

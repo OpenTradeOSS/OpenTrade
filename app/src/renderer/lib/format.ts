@@ -14,6 +14,13 @@ export function signedUsd(value: number | null | undefined): string {
   return value < 0 ? `-${s}` : `+${s}`;
 }
 
+/** Format a fraction (0.031) as a signed percent ("+3.10%" / "-3.10%"). */
+export function signedPct(fraction: number | null | undefined): string {
+  if (fraction === null || fraction === undefined) return "—";
+  const s = `${(Math.abs(fraction) * 100).toFixed(2)}%`;
+  return fraction < 0 ? `-${s}` : `+${s}`;
+}
+
 /** Format a fraction (0.0072) as an unsigned percent ("0.72%"). */
 export function pct(fraction: number | null | undefined): string {
   if (fraction === null || fraction === undefined) return "—";

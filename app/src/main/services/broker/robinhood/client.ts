@@ -4,17 +4,34 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { Account, OrderStatus, Portfolio, Position, Quote } from "@shared/broker";
+import type {
+  Account,
+  CryptoPosition,
+  CryptoQuote,
+  OptionContract,
+  OptionPosition,
+  OptionQuote,
+  OrderStatus,
+  Portfolio,
+  Position,
+  Quote,
+} from "@shared/broker";
 import type { Db } from "../../../db/client";
 import { type BrokerAdapter, ConnectSuperseded, type McpServerConfig } from "../adapter";
 import {
   mapAccounts,
+  mapCryptoOrderStatuses,
+  mapCryptoPositions,
+  mapCryptoQuotes,
+  mapOptionInstruments,
+  mapOptionOrderStatuses,
+  mapOptionPositions,
+  mapOptionQuotes,
   mapOrderStatuses,
   mapPortfolio,
   mapPositions,
   mapQuotes,
   nextCursor,
-  RH_ORDER_TOOLS,
   RH_TOOLS,
   unwrap,
 } from "./mapping";
@@ -327,8 +344,82 @@ export class RobinhoodAdapter implements BrokerAdapter {
     return mapQuotes(await this.call(RH_TOOLS.getEquityQuotes, { symbols }));
   }
 
-  orderToolNames(): string[] {
-    return RH_ORDER_TOOLS;
+  // ---- options ----
+
+  async getOptionOrders(
+    accountNumber: string,
+    opts: { createdAtGte?: string; cursor?: string } = {},
+  ): Promise<{ orders: OrderStatus[]; cursor: string | null }> {
+    // As with equities: no `placed_agent` filter, so manual RH-app orders show too.
+    const args: Record<string, unknown> = { account_number: accountNumber };
+    if (opts.createdAtGte) args.created_at_gte = opts.createdAtGte;
+    if (opts.cursor) args.cursor = opts.cursor;
+    const payload = await this.call(RH_TOOLS.getOptionOrders, args);
+    return { orders: mapOptionOrderStatuses(payload), cursor: nextCursor(payload) };
+  }
+
+  async getOptionOrder(accountNumber: string, orderId: string): Promise<OrderStatus | null> {
+    const payload = await this.call(RH_TOOLS.getOptionOrders, {
+      account_number: accountNumber,
+      order_id: orderId,
+    });
+    return mapOptionOrderStatuses(payload)[0] ?? null;
+  }
+
+  async getOptionPositions(accountNumber: string): Promise<OptionPosition[]> {
+    return mapOptionPositions(
+      await this.call(RH_TOOLS.getOptionPositions, {
+        account_number: accountNumber,
+        nonzero: true,
+      }),
+    );
+  }
+
+  async getOptionContracts(optionIds: string[]): Promise<OptionContract[]> {
+    if (optionIds.length === 0) return [];
+    // `ids` is comma-separated; the tool takes a whole batch in one call.
+    return mapOptionInstruments(
+      await this.call(RH_TOOLS.getOptionInstruments, { ids: optionIds.join(",") }),
+    );
+  }
+
+  async getOptionQuotes(optionIds: string[]): Promise<OptionQuote[]> {
+    if (optionIds.length === 0) return [];
+    return mapOptionQuotes(
+      await this.call(RH_TOOLS.getOptionQuotes, { instrument_ids: optionIds }),
+    );
+  }
+
+  // ---- crypto (keyed by the numeric rhs account number) ----
+
+  async getCryptoOrders(
+    rhsAccountNumber: string,
+    opts: { createdAtGte?: string; cursor?: string } = {},
+  ): Promise<{ orders: OrderStatus[]; cursor: string | null }> {
+    const args: Record<string, unknown> = { rhs_account_number: rhsAccountNumber };
+    if (opts.createdAtGte) args.created_at_gte = opts.createdAtGte;
+    if (opts.cursor) args.cursor = opts.cursor;
+    const payload = await this.call(RH_TOOLS.getCryptoOrders, args);
+    return { orders: mapCryptoOrderStatuses(payload), cursor: nextCursor(payload) };
+  }
+
+  async getCryptoOrder(rhsAccountNumber: string, orderId: string): Promise<OrderStatus | null> {
+    const payload = await this.call(RH_TOOLS.getCryptoOrders, {
+      rhs_account_number: rhsAccountNumber,
+      order_id: orderId,
+    });
+    return mapCryptoOrderStatuses(payload)[0] ?? null;
+  }
+
+  async getCryptoPositions(rhsAccountNumber: string): Promise<CryptoPosition[]> {
+    return mapCryptoPositions(
+      await this.call(RH_TOOLS.getCryptoPositions, { rhs_account_number: rhsAccountNumber }),
+    );
+  }
+
+  async getCryptoQuotes(pairSymbols: string[]): Promise<CryptoQuote[]> {
+    if (pairSymbols.length === 0) return [];
+    return mapCryptoQuotes(await this.call(RH_TOOLS.getCryptoQuotes, { symbols: pairSymbols }));
   }
 
   mcpServerConfig(): { name: string; config: McpServerConfig } {

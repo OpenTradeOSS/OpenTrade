@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { OptionLeg } from "./options";
 
 /**
  * Best-effort structured view of an order tool's input, parsed from the exact
@@ -6,7 +7,8 @@ import { z } from "zod";
  * row; this is only for the human-facing card and is allowed to be incomplete.
  */
 export const ParsedOrder = z.object({
-  kind: z.enum(["place", "cancel", "unknown"]),
+  /** `exercise` = `exercise_option` (its cancel parses as `cancel`); additive for old rows. */
+  kind: z.enum(["place", "cancel", "exercise", "unknown"]),
   symbol: z.string().nullable(),
   side: z.string().nullable(),
   quantity: z.number().nullable(),
@@ -21,6 +23,20 @@ export const ParsedOrder = z.object({
   cancelsOrderId: z.string().nullable().optional(),
   /** Human-readable one-liner, e.g. "BUY 10 AAPL @ market — est. $2,150". */
   summary: z.string(),
+  // ---- asset-specific (absent on equity rows and on rows written before these were modelled) ----
+  assetType: z.enum(["equity", "option", "crypto"]).optional(),
+  /**
+   * What is being traded, for display where an equity would show its symbol: the
+   * contract (`TLT $86C 11/20/26`) or, for a spread, the underlying + leg count.
+   * For an option `symbol` is the underlying.
+   */
+  instrument: z.string().nullable().optional(),
+  legs: z.array(OptionLeg).optional(),
+  /** Shares per contract; `estCost` already includes it. */
+  multiplier: z.number().nullable().optional(),
+  /** Net "debit" | "credit" (multi-leg). */
+  direction: z.string().nullable().optional(),
+  stopPrice: z.number().nullable().optional(),
 });
 export type ParsedOrder = z.infer<typeof ParsedOrder>;
 

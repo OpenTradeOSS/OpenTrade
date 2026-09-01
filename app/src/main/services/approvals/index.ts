@@ -8,6 +8,7 @@ import type {
   PreToolUseDecision,
 } from "@shared/approval";
 import type { OrderStatus } from "@shared/broker";
+import { legsLabel, type OptionContract } from "@shared/options";
 import { DEFAULT_SETTINGS } from "@shared/settings";
 import { and, asc, desc, eq, isNull, like } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -18,10 +19,17 @@ import { analytics } from "../analytics";
 import type { AuditLog } from "../audit";
 import { bus } from "../event-bus";
 import type { StatusArbiter } from "../status/arbiter";
-import { enrichCancelParsed, parseOrderInput, parseOrderResult } from "./parse";
+import { enrichCancelParsed, enrichOptionParsed, parseOrderInput, parseOrderResult } from "./parse";
 
 // Shared with SettingsService, which writes the same `approval_timeout_sec` key.
 const DEFAULT_TIMEOUT_SEC = DEFAULT_SETTINGS.approvalTimeoutSec;
+/**
+ * Upper bound on resolving an option order's contract ids before the card is
+ * raised. The lookup is cache-first and normally instant; a cold miss is one MCP
+ * round-trip. Past this the card goes up unresolved (`BUY 1 option …`) rather than
+ * holding the agent's tool call — the gate must never hang on a display nicety.
+ */
+const CONTRACT_RESOLVE_MS = 4_000;
 
 interface Waiter {
   resolve: (decision: PreToolUseDecision) => void;
@@ -46,6 +54,12 @@ export class ApprovalService {
    * card with the target order's details (§6.9).
    */
   private resolveOrder: ((orderId: string) => OrderStatus | null) | null = null;
+  /**
+   * Resolve option contract ids to their identity, so an option order's card can
+   * name the contract instead of a UUID. Injected like `resolveOrder` (same
+   * dependency cycle); bounded by `CONTRACT_RESOLVE_MS`.
+   */
+  private resolveContracts: ((ids: string[]) => Promise<Map<string, OptionContract>>) | null = null;
 
   constructor(
     private db: Db,
@@ -57,6 +71,11 @@ export class ApprovalService {
   /** Wire the ledger lookup used to enrich cancel cards. Called once at boot. */
   setOrderResolver(fn: (orderId: string) => OrderStatus | null): void {
     this.resolveOrder = fn;
+  }
+
+  /** Wire the option-contract lookup used to enrich option order cards. Called once at boot. */
+  setContractResolver(fn: (ids: string[]) => Promise<Map<string, OptionContract>>): void {
+    this.resolveContracts = fn;
   }
 
   /** Seconds the user is given before an order auto-denies. */
@@ -132,8 +151,20 @@ export class ApprovalService {
           orderType: o.type,
           limitPrice: o.limitPrice,
           dollarAmount: o.dollarAmount,
+          assetType: o.assetType ?? "equity",
+          instrument: o.assetType === "option" ? legsLabel(o.legs ?? []) : null,
+          multiplier: o.multiplier ?? null,
         },
       );
+    }
+    // An option order — or an exercise — names its contracts only by UUID.
+    // Resolve them (bounded) so the card and audit trail read `TLT $86C
+    // 11/20/26`, not `option`. Applies to any option-parsed card carrying legs
+    // (an ordinary order-cancel has none; it enriched from the ledger above).
+    if (parsed.assetType === "option" && parsed.legs?.length && this.resolveContracts) {
+      const ids = parsed.legs.map((l) => l.optionId).filter(Boolean);
+      const contracts = await withTimeout(this.resolveContracts(ids), CONTRACT_RESOLVE_MS);
+      if (contracts) parsed = enrichOptionParsed(parsed, contracts);
     }
     const id = nanoid();
     const now = Date.now();
@@ -196,8 +227,13 @@ export class ApprovalService {
         this.wake(id);
       }, timeoutSec * 1000);
       this.waiters.set(id, { resolve, timer });
-      // If the agent's session dies mid-poll, the order is moot — abandon it.
-      opts?.signal?.addEventListener("abort", () => this.abandon(id), { once: true });
+      // If the agent's session dies mid-poll, the order is moot — abandon it. The
+      // signal may ALREADY be aborted (a listener added after abort never fires):
+      // the contract resolution above can await up to CONTRACT_RESOLVE_MS, and the
+      // hook can disconnect inside that window — without this check the card would
+      // sit pending for the full approval timeout.
+      if (opts?.signal?.aborted) this.abandon(id);
+      else opts?.signal?.addEventListener("abort", () => this.abandon(id), { once: true });
     });
   }
 
@@ -464,4 +500,21 @@ function safeJson<T>(text: string | null): T | null {
   } catch {
     return null;
   }
+}
+
+/** Resolve to `null` if `p` neither settles nor errors within `ms`. Never throws. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
 }
