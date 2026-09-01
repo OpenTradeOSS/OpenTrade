@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import type { WakeFailureCategory } from "@shared/analytics";
 import { hostLog } from "../../../host/log";
 import type { AgentRegistry } from "../../agents/registry";
 import { analytics } from "../../analytics";
@@ -8,6 +9,7 @@ import {
   CodexServerUnavailableError,
   codexHomeFor,
 } from "../../harness/codex-app-server";
+import { classifyWakeFailure } from "./failure-category";
 import { formatWakePrompt } from "./prompt";
 import { clearSpawnMarker, writeSpawnMarker } from "./spawn-marker";
 import type { HeadlessExitReason, HeadlessWakeStrategy } from "./types";
@@ -44,7 +46,7 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
     const startedAt = Date.now();
 
     let settled = false;
-    const settle = (reason: HeadlessExitReason) => {
+    const settle = (reason: HeadlessExitReason, failureCategory?: WakeFailureCategory) => {
       if (settled) return;
       settled = true;
       this.active.delete(agentId);
@@ -52,6 +54,7 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
       analytics.track("headless_run_finished", {
         result: reason === "ok" ? "ok" : reason === "resumeFail" ? "resume_fail" : "spawn_fail",
         duration_ms: Math.max(0, Date.now() - startedAt),
+        ...(failureCategory ? { failure_category: failureCategory } : {}),
       });
       onExit(reason);
     };
@@ -91,7 +94,7 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
         );
         if (result.outcome === "failed") {
           hostLog.warn("codex wake turn failed", agentId, result.error);
-          settle("resumeFail");
+          settle("resumeFail", classifyWakeFailure(String(result.error)));
         } else if (result.outcome === "interrupted" && !acked) {
           // Killed before delivery. A deliberate user Stop is handled by the
           // coordinator's `stopping` short-circuit regardless of reason; for the
@@ -104,7 +107,11 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
       } catch (err) {
         hostLog.warn("codex wake run errored", agentId, String(err));
         analytics.trackError("wake", err, "caught");
-        settle(err instanceof CodexServerUnavailableError ? "spawnFail" : "resumeFail");
+        if (err instanceof CodexServerUnavailableError) {
+          settle("spawnFail");
+        } else {
+          settle("resumeFail", classifyWakeFailure(String(err)));
+        }
       }
     })();
   }

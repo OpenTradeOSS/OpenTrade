@@ -58,6 +58,21 @@ const orderSide = z.enum(["buy", "sell", "other"]);
 const orderType = z.enum(["market", "limit", "other"]);
 const orderKind = z.enum(["place", "cancel", "exercise"]);
 
+/**
+ * Why a failed headless wake run failed, classified from the claude CLI's stderr tail
+ * (or the codex app-server's turn error) at the exit site. Only the category ships —
+ * the text it was derived from stays in the local host log. `other` is the fail-closed
+ * bucket for anything the classifier doesn't recognize.
+ */
+export const WakeFailureCategory = z.enum([
+  "auth",
+  "billing",
+  "rate_limit",
+  "unknown_session",
+  "other",
+]);
+export type WakeFailureCategory = z.infer<typeof WakeFailureCategory>;
+
 /** Subsystem an `app_error` originated in. */
 export const ErrorSubsystem = z.enum([
   "host",
@@ -188,6 +203,11 @@ export const TELEMETRY_EVENTS = {
   headless_run_finished: z.strictObject({
     result: z.enum(["ok", "resume_fail", "spawn_fail"]),
     duration_ms: z.number().int().nonnegative(),
+    /** Present only on failed runs whose exit site has error text to classify (a
+     *  claude resume-fail's stderr tail, a codex turn error) — spawn errors and
+     *  pre-delivery interrupts carry none. Without it a resume-fail streak that
+     *  breaks an agent is undiagnosable from telemetry (the text is local-only). */
+    failure_category: WakeFailureCategory.optional(),
   }),
   agent_marked_broken: z.strictObject({}),
   turn_limit_reached: z.strictObject({}),
