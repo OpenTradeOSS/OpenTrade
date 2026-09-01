@@ -1,7 +1,7 @@
 {
   "name": "@opentrade/app",
   "productName": "OpenTrade",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "OpenTrade — a transparent control panel for local Claude Code / Codex trading agents.",
   "author": "OpenTrade contributors",
   "homepage": "https://github.com/OpenTradeOSS/OpenTrade",

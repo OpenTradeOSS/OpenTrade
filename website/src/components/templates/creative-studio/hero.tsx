@@ -15,7 +15,7 @@ const EASE_OUT_EXPO: [number, number, number, number] = [0.16, 1, 0.3, 1];
 // every release until the DMG gets a version-less `artifactName` in electron-builder.yml,
 // after which the permalink can be used directly. Apple silicon only — no x64 build ships.
 const DOWNLOAD_URL =
-  "https://github.com/OpenTradeOSS/OpenTrade/releases/download/v0.2.5/OpenTrade-0.2.5-arm64.dmg";
+  "https://github.com/OpenTradeOSS/OpenTrade/releases/download/v0.2.6/OpenTrade-0.2.6-arm64.dmg";
 
 function GitHubMark({ className }: { className?: string }) {
   return (
