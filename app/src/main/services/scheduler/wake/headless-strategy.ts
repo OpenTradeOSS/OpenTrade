@@ -1,11 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import type { WakeFailureCategory } from "@shared/analytics";
 import { hostLog } from "../../../host/log";
 import type { AgentRegistry } from "../../agents/registry";
 import { analytics } from "../../analytics";
 import { harnessFor } from "../../harness";
 import type { LocalApiServer } from "../../local-api";
 import { buildAgentEnv } from "../../terminal/env";
+import { classifyWakeFailure } from "./failure-category";
 import { formatWakePrompt } from "./prompt";
 import { clearSpawnMarker, writeSpawnMarker } from "./spawn-marker";
 import type { HeadlessExitReason, HeadlessWakeStrategy } from "./types";
@@ -150,7 +152,7 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
 
     // Report the outcome exactly once (error and exit can't both meaningfully fire).
     let settled = false;
-    const settle = (reason: HeadlessExitReason) => {
+    const settle = (reason: HeadlessExitReason, failureCategory?: WakeFailureCategory) => {
       if (settled) return;
       settled = true;
       this.children.delete(agentId);
@@ -158,6 +160,7 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
       analytics.track("headless_run_finished", {
         result: reason === "ok" ? "ok" : reason === "resumeFail" ? "resume_fail" : "spawn_fail",
         duration_ms: Math.max(0, Date.now() - startedAt),
+        ...(failureCategory ? { failure_category: failureCategory } : {}),
       });
       onExit(reason);
     };
@@ -185,7 +188,7 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
         // row, flips the agent to `broken` (which pauses its scheduling). This is also the
         // heuristic that fires on a valid transient error like an exhausted credit balance:
         // that legitimately stops the agent until the user intervenes (top up + Restart).
-        settle("resumeFail");
+        settle("resumeFail", classifyWakeFailure(stderrTail));
       } else {
         settle("ok");
       }
