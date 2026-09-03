@@ -7,6 +7,7 @@
     <a href="https://github.com/OpenTradeOSS/OpenTrade/releases"><img src="https://img.shields.io/github/v/release/OpenTradeOSS/OpenTrade?style=flat&logo=github" alt="Latest release" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Elastic%20License%202.0-blue?style=flat" alt="License" /></a>
     <a href="https://discord.gg/F63YFPRtq"><img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord" /></a>
+    <a href="https://x.com/opentradeapp"><img src="https://img.shields.io/badge/Follow-%40opentradeapp-555?logo=x&amp;logoColor=white" alt="Follow @opentradeapp on X" /></a>
   </p>
 
   <p>
@@ -97,7 +98,8 @@ we'll take a look.
 
 ## Community
 
-Come join our [Discord](https://discord.gg/F63YFPRtq) to discuss all things OpenTrade!
+Come join our [Discord](https://discord.gg/F63YFPRtq) to discuss all things OpenTrade, and
+follow [@opentradeapp](https://x.com/opentradeapp) on X for release notes and updates.
 
 ## Disclaimer
 

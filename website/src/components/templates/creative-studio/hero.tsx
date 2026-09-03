@@ -25,6 +25,14 @@ function GitHubMark({ className }: { className?: string }) {
   );
 }
 
+function XMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className} fill="currentColor">
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231L18.244 2.25Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z" />
+    </svg>
+  );
+}
+
 function HeroCopy({ reduce }: { reduce: boolean | null }) {
   const fade = (delay: number) => ({
     initial: reduce ? false : { y: 20, opacity: 0 },
@@ -58,7 +66,15 @@ function HeroCopy({ reduce }: { reduce: boolean | null }) {
           guardrails, and run in the background &mdash; all on your machine.
         </motion.p>
 
-        <motion.div {...fade(0.7)} className="flex w-full max-w-md flex-wrap items-center gap-3">
+        {/* Below `xl` the three CTAs are wider than the column, so they wrap. From `xl` the row
+            is sized to `max-content` — wider than the column, so it overflows past the left of
+            the copy while the parent's `items-end` keeps its right edge flush with the copy's,
+            putting all three on one line. `w-max` rather than `w-auto`: the latter would clamp
+            to the column and squeeze the pills instead of overflowing. */}
+        <motion.div
+          {...fade(0.7)}
+          className="flex w-full max-w-md flex-wrap items-center gap-3 xl:w-max xl:max-w-none xl:flex-nowrap"
+        >
           <a
             href={DOWNLOAD_URL}
             onClick={() => track("download_clicked")}
@@ -77,6 +93,18 @@ function HeroCopy({ reduce }: { reduce: boolean | null }) {
             View on GitHub
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 transition-transform duration-300 group-hover:scale-110 sm:h-10 sm:w-10">
               <GitHubMark className="h-4 w-4 text-(--cs-ink)" />
+            </span>
+          </a>
+          {/* Icon-only, and padded like the pills above so all three share one height. */}
+          <a
+            href="https://x.com/opentradeapp"
+            onClick={() => track("x_clicked")}
+            aria-label="Follow OpenTrade on X"
+            title="Follow @opentradeapp on X"
+            className="group inline-flex w-fit items-center rounded-full bg-black p-1.5 transition-all duration-300"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 transition-transform duration-300 group-hover:scale-110 sm:h-10 sm:w-10">
+              <XMark className="h-3.5 w-3.5 text-(--cs-ink)" />
             </span>
           </a>
         </motion.div>
