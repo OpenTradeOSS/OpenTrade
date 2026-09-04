@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../../db/client";
 import { settings } from "../../../db/schema";
+import { analytics } from "../../analytics";
 
 /**
  * Read/write the settings kv. Values are stored as plaintext JSON: the backend
@@ -110,6 +111,12 @@ export class BrokerOAuthProvider {
    * as the browser gate: the SDK may only open a browser while this is set.
    */
   private activeRedirectUrl: string | null = null;
+  /**
+   * When the current consent's loopback was bound — which is also when its timeout
+   * started running. Used only to measure how much of that budget was gone by the time
+   * the browser opened (`broker_consent_opened`).
+   */
+  private armedAt: number | null = null;
 
   constructor(private opts: OAuthProviderOptions) {
     this.store = new SecureStore(opts.db);
@@ -140,11 +147,13 @@ export class BrokerOAuthProvider {
     this.store.clear(K_CLIENT);
     this.store.clear(K_VERIFIER);
     this.activeRedirectUrl = redirectUrl;
+    this.armedAt = Date.now();
   }
 
   /** The interactive consent ended (however it ended): the browser gate closes again. */
   endAuthorization() {
     this.activeRedirectUrl = null;
+    this.armedAt = null;
   }
 
   state() {
@@ -176,6 +185,10 @@ export class BrokerOAuthProvider {
   redirectToAuthorization(url: URL) {
     if (!this.activeRedirectUrl) throw new ConsentRequired();
     this.opts.openBrowser(url.toString());
+    // After the open, so a browser we failed to launch isn't recorded as one the user saw.
+    analytics.track("broker_consent_opened", {
+      armed_ms: this.armedAt === null ? 0 : Math.max(0, Date.now() - this.armedAt),
+    });
   }
 
   saveCodeVerifier(verifier: string) {
