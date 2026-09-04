@@ -29,4 +29,6 @@ CLAUDE.md
 dev.sh
 .env.example
 
+.python-version
+
 /scripts/

@@ -9,13 +9,12 @@
 // native package is copied with only its RUNTIME dependency closure nested under
 // its own `node_modules/`, and its package.json is pruned to those deps. The
 // pruning matters for two reasons:
-//   1. Build-only deps (prebuild-install, node-addon-api) pull deep trees
+//   1. Build-only deps (prebuild-install) pull deep trees
 //      (prebuild-install -> simple-get -> once, ...) that aren't needed at runtime
 //      and that electron-builder's dependency collector would otherwise try (and
 //      fail) to resolve out of the bun store.
 //   2. better-sqlite3 only `require`s `bindings` (-> file-uri-to-path) at runtime;
-//      node-pty requires nothing extra. prebuild-install/node-addon-api are only
-//      used by `npm install` to fetch/compile the binary, which already happened.
+//      node-pty keeps `node-addon-api` (leaf package) so Linux can node-gyp rebuild.
 //
 // Idempotent-ish: skips packages that are already real, pruned dirs. Run it AFTER
 // `electron-builder install-app-deps` (so the copied `.node` is the Electron-ABI
@@ -46,7 +45,8 @@ const RUNTIME_DEPS = {
   "better-sqlite3": ["bindings"],
   bindings: ["file-uri-to-path"],
   "file-uri-to-path": [],
-  "node-pty": [],
+  "node-pty": ["node-addon-api"],
+  "node-addon-api": [],
 };
 const ENTRY_POINTS = ["better-sqlite3", "node-pty"];
 

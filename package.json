@@ -10,6 +10,7 @@
     "dev": "bun run --cwd app dev",
     "build": "bun run --cwd app build",
     "typecheck": "bun run --cwd app typecheck",
+    "package": "bun run --cwd app package",
     "test": "bun test",
     "lint": "bunx @biomejs/biome check .",
     "format": "bunx @biomejs/biome format --write ."
