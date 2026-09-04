@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * The kinds of macOS notification OpenTrade shows. Each has a settings toggle
+ * The kinds of desktop notification OpenTrade shows. Each has a settings toggle
  * (§12.4) and rides the `notification_clicked` telemetry `kind` prop.
  */
 export const NotificationKind = z.enum(["wake", "order", "approval", "restricted", "update"]);

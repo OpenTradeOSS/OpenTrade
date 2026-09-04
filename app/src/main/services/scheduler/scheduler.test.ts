@@ -385,7 +385,9 @@ describe("Scheduler CRUD", () => {
     const db = memDb();
     scheduler = makeSchedulerOn(db);
     // A command that emits one line immediately → one trigger → one fire.
-    const m = scheduler.createMonitor("agent1", { command: "printf 'go\\n'; sleep 5" });
+    const m = scheduler.createMonitor("agent1", {
+      command: `"${process.execPath}" -e "console.log('go'); setTimeout(() => {}, 5000)"`,
+    });
     await wait(300);
 
     const wakes = db.select().from(schema.wakes).all();

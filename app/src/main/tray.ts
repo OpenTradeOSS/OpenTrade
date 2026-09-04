@@ -1,9 +1,11 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Agent, AgentStatus } from "@shared/agent";
 import type { RecentNotification } from "@shared/notify";
-import { Menu, type MenuItemConstructorOptions, nativeImage, Tray } from "electron";
+import { app, Menu, type MenuItemConstructorOptions, nativeImage, Tray } from "electron";
 
 /**
- * The macOS menu bar (status) item — §12.6.
+ * The macOS menu bar / Windows system tray status item — §12.6.
  *
  * A launcher-side monitor over the same relay stream that drives notifications:
  * per-agent status, the pending-approval count (also shown as the item's title so
@@ -56,10 +58,19 @@ const ICON_32 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAADpklEQVR42sWX24tVZRjGf7P3nqYZtUmIQC8GpAtBJIRwiETvkgwPieFVmgQp6IWCUYQHRMl/QJARVMQLEVT0QkJRBCPNQ2JMgYJW6KCjEB085szee3nzfPLM65q1tgT5wWLttfb7Pe/zPe/h+xa85NFW8n8VaNjzu8Bs3ScBrwMZcA+4AVwETgDf27yI0fKo6l4DlgFngWE5LLrqwCVgFdAVsF7Y+Uzgx+BgGBgCmlr5z8AA8CSHzBXgQ2FVWlB8hPM1ki6BNSVzem7oeTwwFpgMLAEO55DZbNiFJGq6b7HVZsApYAYwRjlw3cC35+BMA44EjL4yEmnlqzUhrWJDju1bwF9S5V+gRxK3h3ivUk4MCWvraDlRtSxv2ITPLX6JeWdQKQNWBAUr9nthIDEvj0Ri32+gaeWvCCyyXmS5sTsQwOaihSTbAWCcfI4YS835d3rXEWzGAu+oLK9Zkp60hcTRrvtBw/8yGlWAC2JYB6YbWBVYAOwDbsrGaz4DfihobKn8JgGPNP9X6xEA9IaMd5kvlzSdDDhX0llT+PbY3Pku2RyL3y5Jv0+yTTOgG3q3SU4TcNZCy08qpzHXDb4VyH2pcdqSJsV4gXIgjYmyz9SmixRIiztjClx2g6t6+Tfwmxn9CXySA1YDuoE7sjtTQKA9JHndsJ+NOyG2TSXcVIth6gPJyXjgbgGBNnP+NvCP8qxhHfI5AnX9cc+ct4+yhbsCZxXjSmhCqKJuhep5jsC10Lc/G8W5ExgHDIYq8NEJrAUemvML5mtECE4Ys3Mle3ibNaVBy51ebVbTgfWWV57IPcBtPfc76DdG4As5qZUQGGME0uY1kNMrmsA24c2y93scdKYlx+EWFeiy1TRyHD8W1ns2d6cpsjiWVr/+HAKmyFG1gECHKsUJXAUOaUufHEpxgkKVNqTXIvBKY3+0IAl9/GRzNuaErQK8qt+7c05IIww7tUkkiVaGLTWvt+83+16p0yEiFZv7sSn1B/BGbFoJcLYMh9QTPrIQVXJa6zJb1QHDqpl6s1SK6UCypOxUtNmyehhYHmyqtsV2hy76dcBcDDyw/rKjKMG99PpCY9ofkspBPg2254F12lW99x8MR7tRSywBbw1l9QDYqzPdBAvJVOVB05zFq89UK/02aDPwhWF3zKzz/aKj201zXg9fT4PKE1p1nidxN/CVvnKyFq/flUtvln0LvMjHaRfwPvCB+n2PnW4fqrlcAo4Bx7X9/qeP0/9lPAXLNXbyrktA3AAAAABJRU5ErkJggg==";
 
 function trayIcon() {
+  if (process.platform === "win32") {
+    const iconPath = app.isPackaged
+      ? join(process.resourcesPath, "icon.png")
+      : join(__dirname, "../../build/icon.png");
+    if (existsSync(iconPath)) {
+      const windowsIcon = nativeImage.createFromPath(iconPath);
+      if (!windowsIcon.isEmpty()) return windowsIcon.resize({ width: 16, height: 16 });
+    }
+  }
   const img = nativeImage.createEmpty();
   img.addRepresentation({ scaleFactor: 1, buffer: Buffer.from(ICON_16, "base64") });
   img.addRepresentation({ scaleFactor: 2, buffer: Buffer.from(ICON_32, "base64") });
-  img.setTemplateImage(true);
+  if (process.platform === "darwin") img.setTemplateImage(true);
   return img;
 }
 
@@ -97,6 +108,7 @@ export class AppTray {
     if (this.tray) return;
     this.tray = new Tray(trayIcon());
     this.tray.setToolTip("OpenTrade");
+    if (process.platform === "win32") this.tray.on("click", () => this.actions.openWindow());
     this.render();
     // Rows carry relative times ("2h ago"), which would otherwise freeze at whatever
     // the last data push rendered. macOS can't update an open menu, but every reopen
@@ -137,9 +149,15 @@ export class AppTray {
     if (!this.tray) return;
     // The pending-approval count rides next to the icon so the one actionable state is
     // visible without opening the menu (the dock badge is gone once the window closes).
-    this.tray.setTitle(this.pending > 0 ? String(this.pending) : "", {
-      fontType: "monospacedDigit",
-    });
+    if (process.platform === "darwin") {
+      this.tray.setTitle(this.pending > 0 ? String(this.pending) : "", {
+        fontType: "monospacedDigit",
+      });
+    } else {
+      this.tray.setToolTip(
+        this.pending > 0 ? `OpenTrade — ${this.pending} approval(s) pending` : "OpenTrade",
+      );
+    }
     this.tray.setContextMenu(Menu.buildFromTemplate(this.template()));
   }
 

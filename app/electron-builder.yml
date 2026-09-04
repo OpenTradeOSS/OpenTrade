@@ -31,6 +31,8 @@ extraResources:
     to: templates
   - from: ../resources
     to: resources
+  - from: build/icon.png
+    to: icon.png
 mac:
   category: public.app-category.finance
   target:
@@ -48,6 +50,18 @@ mac:
   # APPLE_TEAM_ID are in the environment; the Developer ID cert comes from
   # CSC_LINK / CSC_KEY_PASSWORD. See docs/PACKAGING.md.
   notarize: true
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
 dmg:
   title: OpenTrade ${version}
   contents:
@@ -61,4 +75,7 @@ publish:
   provider: github
   owner: OpenTradeOSS
   repo: OpenTrade
-npmRebuild: true
+# Native dependencies are prepared explicitly by `bun run rebuild` in release
+# workflows. node-pty ships Electron-compatible platform prebuilds; rebuilding it
+# unnecessarily requires optional Spectre C++ libraries on Windows builders.
+npmRebuild: false

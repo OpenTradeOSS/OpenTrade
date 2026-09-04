@@ -14,7 +14,7 @@ export function createMainWindow(host: HostEndpoint): BrowserWindow {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    titleBarStyle: "hiddenInset",
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     backgroundColor: "#121212",
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),

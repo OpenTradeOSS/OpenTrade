@@ -41,7 +41,7 @@ export const AppSettings = z.object({
    *  through). Interactive sessions are unaffected either way. */
   backgroundAllowApiKey: z.boolean(),
 
-  // ---- macOS notifications (§12.4). All default on: the launcher gates display. ----
+  // ---- desktop notifications (§12.4). All default on: the launcher gates display. ----
   /** Notify when a cron/monitor wakes an agent (launcher shows it only while unfocused). */
   notifyWakes: z.boolean(),
   /** Notify when an agent-placed order reaches a terminal state (filled/rejected/…). */
@@ -56,7 +56,7 @@ export const AppSettings = z.object({
   notifyMutedAgents: z.array(z.string()),
 
   // ---- menu bar (§12.6) ----
-  /** Show the OpenTrade status item in the macOS menu bar and keep the launcher alive
+  /** Show the OpenTrade status item in the macOS menu bar / Windows system tray and keep the launcher alive
    *  there when the window is closed / ⌘Q'd, so agent status + notifications keep
    *  flowing while the app is "closed". On by default; off restores plain quit. */
   showInMenuBar: z.boolean(),

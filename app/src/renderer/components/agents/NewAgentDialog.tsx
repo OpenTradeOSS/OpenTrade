@@ -17,6 +17,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useCreateAgent } from "../../hooks/useCreateAgent";
 import { useSettings } from "../../hooks/useSettings";
 import { trpc } from "../../lib/trpc";
+import { formatCombo } from "../../lib/shortcuts";
 import { cn } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui";
 import { HarnessGlyph } from "../icons/HarnessGlyph";
@@ -48,7 +49,7 @@ const ENVIRONMENTS: PickerOption[] = [
     value: "local",
     icon: <Laptop className="size-3.5" />,
     label: "Local",
-    hint: "Runs on this Mac",
+    hint: "Runs on this computer",
   },
   {
     value: "cloud",
@@ -254,7 +255,7 @@ function NewAgentForm() {
           />
         </div>
         <span className="px-1 text-[11px] text-muted-foreground/50">
-          {isPending ? "Creating…" : "⌘↵ to create"}
+          {isPending ? "Creating…" : `${formatCombo({ mod: true, key: "Enter" })} to create`}
         </span>
       </div>
     </form>

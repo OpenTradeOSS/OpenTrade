@@ -4,7 +4,7 @@ import { OPENTRADE_HOME } from "../../db/client";
 
 /**
  * Build the environment for an agent's PTY. We inherit the app's env, ensure the
- * usual macOS bin dirs are on PATH (so `claude`, `git`, etc. resolve), and inject
+ * usual platform bin dirs are on PATH (so `claude`, `git`, etc. resolve), and inject
  * OPENTRADE_* identifiers. The hooks-server port/token (OPENTRADE_PORT /
  * OPENTRADE_TOKEN) are layered in by M3.
  *
@@ -28,15 +28,19 @@ export function buildAgentEnv(
   for (const key of opts?.stripEnvKeys ?? []) delete base[key];
 
   const home = homedir();
+  const platformPathDirs =
+    process.platform === "win32"
+      ? [
+          join(home, "AppData", "Roaming", "npm"),
+          join(home, "AppData", "Local", "Microsoft", "WinGet", "Links"),
+        ]
+      : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
   const extraPathDirs = [
     join(home, ".opentrade", "bin"),
     join(home, ".local", "bin"),
     join(home, ".bun", "bin"),
     join(home, "bin"),
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
+    ...platformPathDirs,
   ];
   const currentPath = base.PATH ?? "";
   const merged = [...extraPathDirs, ...currentPath.split(delimiter)].filter(Boolean);

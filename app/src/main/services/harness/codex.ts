@@ -21,6 +21,7 @@ import { hostLog } from "../../host/log";
 import { resolveAgentMcp, resolveHooksDir } from "../agents/paths";
 import { bus } from "../event-bus";
 import { type CodexAppServerManager, codexHomeFor } from "./codex-app-server";
+import { hookCommand } from "./hook-command";
 import { codexConfigHasRobinhood, ROBINHOOD_MCP_URL } from "./robinhood-mcp";
 import type { Harness, ProbeResult, SessionMode } from "./types";
 
@@ -81,7 +82,7 @@ function surfaceSessionSplit(agent: Agent, detail: string): void {
  *    raises an elicitation the backend answers through
  *    ApprovalService; no answer / client error / disconnect = Decline.
  *    (`"approve"` means PRE-approved in codex — never use it for order tools.)
- *  - redundancy: the same approval-gate.sh PreToolUse hook as claude (codex
+ *  - redundancy: the same approval PreToolUse hook as claude (codex
  *    accepts the identical deny JSON); hooks require trust, pre-established via
  *    a `hooks.state` batchWrite at server start.
  * `writeConfig` re-runs before every spawn, healing any tampering.
@@ -205,13 +206,32 @@ export function createCodexHarness(manager: CodexAppServerManager): Harness {
       // sync both ways (codex rewrites auth.json in place on refresh).
       const userAuth = join(homedir(), ".codex", "auth.json");
       const agentAuth = join(codexHome, "auth.json");
-      try {
-        if (existsSync(userAuth) && !lstatSync2(agentAuth)) symlinkSync(userAuth, agentAuth);
-      } catch (err) {
-        hostLog.warn("codex auth link failed (agent may need `codex login`)", String(err));
+      if (existsSync(userAuth)) {
+        try {
+          if (!lstatSync2(agentAuth)) symlinkSync(userAuth, agentAuth);
+        } catch (err) {
+          // Windows symlinks may require Developer Mode or elevation. A refreshed
+          // copy on every launch still gives the agent the user's current login.
+          try {
+            copyFileSync(userAuth, agentAuth);
+          } catch (copyErr) {
+            hostLog.warn(
+              "codex auth link/copy failed (agent may need `codex login`)",
+              String(err),
+              String(copyErr),
+            );
+          }
+        }
+        if (process.platform === "win32") {
+          try {
+            if (!lstatSync(agentAuth).isSymbolicLink()) copyFileSync(userAuth, agentAuth);
+          } catch {
+            // handled above on first creation; best effort on refresh
+          }
+        }
       }
 
-      // Gate scripts (same scripts as the claude scaffold — they just forward the
+      // Gate runner (shared with the claude scaffold — it forwards the
       // payload to the local gate endpoints).
       const hooksSrc = resolveHooksDir();
       if (existsSync(hooksSrc)) {
@@ -234,9 +254,8 @@ export function createCodexHarness(manager: CodexAppServerManager): Harness {
       // BOTH transports: the supervised app-server runs turns (and hooks) for
       // background wakes and the TUI's threads alike.
       // Hook commands are shell strings; codex runs hooks with a CLEANED env, so
-      // the non-secret identifiers ride the command itself and the scripts
+      // the non-secret identifiers ride the command itself and the runner
       // recover port/token from the host manifest ($OPENTRADE_HOME/host.json).
-      const hookEnv = `OPENTRADE_AGENT_ID='${agentId}' OPENTRADE_HOME='${OPENTRADE_HOME}'`;
       const hooks = {
         hooks: {
           PreToolUse: [
@@ -245,7 +264,7 @@ export function createCodexHarness(manager: CodexAppServerManager): Harness {
               hooks: [
                 {
                   type: "command",
-                  command: `${hookEnv} '${join(hooksDir, "approval-gate.sh")}'`,
+                  command: hookCommand(hooksDir, "approval", agentId, OPENTRADE_HOME),
                   timeout: 600,
                 },
               ],
@@ -257,7 +276,7 @@ export function createCodexHarness(manager: CodexAppServerManager): Harness {
               hooks: [
                 {
                   type: "command",
-                  command: `${hookEnv} '${join(hooksDir, "order-result.sh")}'`,
+                  command: hookCommand(hooksDir, "order-result", agentId, OPENTRADE_HOME),
                   timeout: 30,
                 },
               ],
@@ -268,7 +287,7 @@ export function createCodexHarness(manager: CodexAppServerManager): Harness {
               hooks: [
                 {
                   type: "command",
-                  command: `${hookEnv} '${join(hooksDir, "status-notify.sh")}'`,
+                  command: hookCommand(hooksDir, "status", agentId, OPENTRADE_HOME),
                   timeout: 10,
                 },
               ],

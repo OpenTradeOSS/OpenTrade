@@ -107,10 +107,24 @@ const versionOf = (m: HostManifest): string => m.version ?? "0.0.0";
  * and the launcher's "Quit OpenTrade Completely" (§12.6).
  */
 export async function terminateHost(m: HostManifest): Promise<void> {
-  try {
-    process.kill(m.pid, "SIGTERM");
-  } catch {
-    // already gone
+  if (process.platform === "win32") {
+    // Windows does not deliver SIGTERM to arbitrary processes; Node terminates
+    // only the requested pid. taskkill /T also retires the host-owned Codex and
+    // PTY children instead of leaving them orphaned after an update/full quit.
+    await new Promise<void>((resolve) => {
+      const killer = spawn("taskkill.exe", ["/PID", String(m.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.once("error", () => resolve());
+      killer.once("close", () => resolve());
+    });
+  } else {
+    try {
+      process.kill(m.pid, "SIGTERM");
+    } catch {
+      // already gone
+    }
   }
   for (let i = 0; i < 50; i++) {
     if (!isAlive(m.pid)) break;
@@ -269,6 +283,7 @@ function spawnHost(hostEntry: string): void {
   const child = spawn(hostLauncherBinary(), [hostEntry], {
     detached: true,
     stdio: "ignore",
+    windowsHide: true,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", OPENTRADE_HOME },
   });
   child.unref();

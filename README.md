@@ -16,7 +16,7 @@
   <img src="assets/demo.png" width="820" alt="OpenTrade app — agent sidebar, live terminal, and portfolio panel" />
 </div>
 
-OpenTrade is a macOS app that enables agents to trade and react to the market autonomously. Agents execute trades in your [Robinhood Agentic Trading](https://robinhood.com/us/en/agentic-trading/) account through the official MCP. Set guardrails, monitors, and schedules so agents can trade 24/7 - all on your machine.
+OpenTrade is a macOS and Windows app that enables agents to trade and react to the market autonomously. Agents execute trades in your [Robinhood Agentic Trading](https://robinhood.com/us/en/agentic-trading/) account through the official MCP. Set guardrails, monitors, and schedules so agents can trade 24/7 - all on your machine.
 
 ## Features
 
@@ -73,9 +73,12 @@ Agents continue to get notified and work in the background, even if the app is c
 
 ## Install
 
-Download the latest `OpenTrade-<version>-arm64.dmg` from
-[Releases](https://github.com/OpenTradeOSS/OpenTrade/releases), open it, and drag OpenTrade to
-Applications. Requires an Apple Silicon Mac. The app auto-updates from GitHub Releases.
+Download the latest installer from [Releases](https://github.com/OpenTradeOSS/OpenTrade/releases):
+
+- macOS (Apple Silicon): `OpenTrade-<version>-arm64.dmg`; open it and drag OpenTrade to Applications.
+- Windows 10/11 (x64): `OpenTrade-<version>-x64-setup.exe`.
+
+The app auto-updates from GitHub Releases on both platforms.
 
 OpenTrade supports both Claude Code and Codex agents, so please install and sign into `claude`
 and/or `codex` CLI. An authenticated MCP connection to Robinhood via your agent is required, see
@@ -85,9 +88,14 @@ instructions.
 ## Build from source
 
 ```bash
-bun install                 # from repo root (bun workspaces)
-bun run --cwd app rebuild   # rebuild native modules for the Electron ABI (once)
-bun run --cwd app dev       # launch with HMR
+bun install           # from repo root (bun workspaces)
+bun run dev           # rebuild native modules for Electron, then launch with HMR
+```
+
+The same commands work in PowerShell on Windows. To create a local Windows installer:
+
+```powershell
+bun run --cwd app package -- --win --x64 --publish never
 ```
 
 ## Contributing

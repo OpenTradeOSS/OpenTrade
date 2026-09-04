@@ -28,7 +28,7 @@ export function App() {
   // Gated off while the backend is down to match the disabled New Agent button.
   useShortcuts({ "create-agent": backendConnected ? openNewAgent : () => {} });
 
-  // A click on an agent in the macOS menu bar item (launcher-side) selects it here.
+  // A click on an agent in the desktop status item (launcher-side) selects it here.
   useShellSelection();
 
   // The launcher couldn't bring up the backend host (trpcPort===0), so nothing can

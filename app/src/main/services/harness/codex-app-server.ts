@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
@@ -27,6 +28,11 @@ import { hostLog } from "../../host/log";
 /** Control socket path for an agent's server, relative to its CODEX_HOME. */
 export function controlSocketPath(codexHome: string): string {
   return join(codexHome, "app-server-control", "app-server-control.sock");
+}
+
+/** Codex accepts forward-slash Windows paths in unix:// listen URLs. */
+export function codexListenUrl(sock: string): string {
+  return `unix://${sock.replaceAll("\\", "/")}`;
 }
 
 /**
@@ -167,7 +173,7 @@ export class CodexAppServerManager {
     }
 
     const startedAt = Date.now();
-    const child = spawn(this.binary, ["app-server", "--listen", `unix://${sock}`], {
+    const child = spawn(this.binary, ["app-server", "--listen", codexListenUrl(sock)], {
       env: { ...this.envFor(agentId, codexHome), CODEX_HOME: codexHome },
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -507,9 +513,12 @@ export class CodexClient {
     onServerRequest?: (method: string, params: unknown, signal: AbortSignal) => Promise<unknown>,
   ): Promise<CodexClient> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws+unix://${sock}:/`, {
+      // ws+unix URLs use ':' as their socket/path separator, which conflicts
+      // with Windows drive letters. Supplying the native connection explicitly
+      // avoids that ambiguity and works for both AF_UNIX and Windows named pipes.
+      const ws = new WebSocket("ws://localhost/", {
+        createConnection: () => createConnection(sock),
         perMessageDeflate: false,
-        headers: { Host: "localhost" },
         handshakeTimeout: timeoutMs,
       });
       ws.once("open", () => resolve(new CodexClient(ws, onServerRequest)));

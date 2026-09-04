@@ -147,6 +147,7 @@ describe("AgentRegistry — codex scaffold divergence", () => {
     const dir = r.agentDir(agent);
     const { existsSync, readFileSync } = await import("node:fs");
     const { basename, join } = await import("node:path");
+    const { OPENTRADE_HOME } = await import("../../db/client");
     const { codexHomeFor } = await import("../harness/codex-app-server");
     const codexHome = codexHomeFor(basename(dir));
 
@@ -193,28 +194,26 @@ describe("AgentRegistry — codex scaffold divergence", () => {
     expect(toml).toContain("[mcp_servers.opentrade]");
     expect(toml).not.toContain("OPENTRADE_TOKEN");
 
-    // Gate hooks: claude-compatible hooks.json + executable scripts, abs paths.
+    // Gate hooks: claude-compatible hooks.json + cross-platform Node runner.
     const hooks = JSON.parse(readFileSync(join(codexHome, "hooks.json"), "utf8"));
     const pre = hooks.hooks.PreToolUse[0];
     expect(pre.matcher).toBe(GATED_TOOL_MATCHER);
     // The regex form must actually match the prefixed tool names Claude Code sees.
     expect(new RegExp(`^${pre.matcher}$`).test("mcp__robinhood__place_crypto_order")).toBe(true);
     expect(new RegExp(`^${pre.matcher}$`).test("mcp__robinhood__get_equity_quotes")).toBe(false);
-    // The command is a shell string carrying the non-secret identifiers (codex
-    // cleans the hook env; the scripts recover port/token from the manifest).
-    expect(pre.hooks[0].command).toContain(join(codexHome, "hooks", "approval-gate.sh"));
-    expect(pre.hooks[0].command).toContain("OPENTRADE_AGENT_ID=");
-    expect(pre.hooks[0].command).toContain("OPENTRADE_HOME=");
+    // Codex cleans the hook env, so the non-secret agent/home identifiers are
+    // arguments and the runner recovers port/token from the host manifest.
+    expect(pre.hooks[0].command).toContain(join(codexHome, "hooks", "hook-runner.cjs"));
+    expect(pre.hooks[0].command).toContain(agent.id);
+    expect(pre.hooks[0].command).toContain(OPENTRADE_HOME);
     expect(pre.hooks[0].timeout).toBe(600);
-    expect(existsSync(join(codexHome, "hooks", "approval-gate.sh"))).toBe(true);
-    expect(existsSync(join(codexHome, "hooks", "order-result.sh"))).toBe(true);
+    expect(existsSync(join(codexHome, "hooks", "hook-runner.cjs"))).toBe(true);
     // Stop = the turn-ended stamp (codex's only status hook — it has no
     // Notification event). No matcher: fires on every turn end.
     const stop = hooks.hooks.Stop[0];
     expect(stop.matcher).toBeUndefined();
-    expect(stop.hooks[0].command).toContain(join(codexHome, "hooks", "status-notify.sh"));
-    expect(stop.hooks[0].command).toContain("OPENTRADE_AGENT_ID=");
-    expect(existsSync(join(codexHome, "hooks", "status-notify.sh"))).toBe(true);
+    expect(stop.hooks[0].command).toContain(join(codexHome, "hooks", "hook-runner.cjs"));
+    expect(stop.hooks[0].command).toContain("status");
 
     // codexHomeFor resolves under the REAL ~/.opentrade/cx (keyed by a hash, not
     // OPENTRADE_HOME — the socket-path length constraint), so this test writes outside
@@ -249,8 +248,9 @@ describe("AgentRegistry — codex scaffold divergence", () => {
     expect(settings.permissions.allow).toContain("mcp__robinhood__get_*");
     expect(settings.permissions.allow).toContain("mcp__robinhood__add_to_watchlist");
     expect(settings.permissions.allow).not.toContain("mcp__robinhood__place_crypto_order");
-    expect(pre.hooks[0].command).toContain(".claude/hooks/approval-gate.sh");
-    expect(existsSync(join(dir, ".claude", "hooks", "approval-gate.sh"))).toBe(true);
+    expect(pre.hooks[0].command).toContain("hook-runner.cjs");
+    expect(pre.hooks[0].command).toContain("approval");
+    expect(existsSync(join(dir, ".claude", "hooks", "hook-runner.cjs"))).toBe(true);
   });
 
   test("claude writeConfig GENERATES the gate config from a bare dir (build-independent + self-heal)", async () => {
@@ -267,9 +267,10 @@ describe("AgentRegistry — codex scaffold divergence", () => {
       expect(existsSync(join(dir, ".claude", "settings.json"))).toBe(false); // bare
       claudeHarness.writeConfig?.(dir, "agent-x");
       const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
-      expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("approval-gate.sh");
+      expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("hook-runner.cjs");
+      expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("approval");
       expect(settings.hooks.PreToolUse[0].hooks[0].timeout).toBe(600);
-      expect(existsSync(join(dir, ".claude", "hooks", "approval-gate.sh"))).toBe(true);
+      expect(existsSync(join(dir, ".claude", "hooks", "hook-runner.cjs"))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

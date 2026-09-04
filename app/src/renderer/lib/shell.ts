@@ -3,7 +3,7 @@ import { useUIStore } from "../stores/ui";
 
 /**
  * Renderer side of the main-process shell bridge (`window.__opentradeShell`, exposed
- * by the preload; contract in shared/shell.ts). The macOS menu bar item (§12.6) lives
+ * by the preload; contract in shared/shell.ts). The desktop status item (§12.6) lives
  * in the launcher; when the user clicks an agent there, main opens/focuses the window
  * and asks us to select that agent. Two paths: a push for an already-mounted renderer,
  * and a pull on mount for the case where the click created the window (the push would

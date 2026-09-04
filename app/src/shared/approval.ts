@@ -115,7 +115,7 @@ export const DecideInput = z.object({
 export type DecideInput = z.infer<typeof DecideInput>;
 
 /**
- * The PreToolUse hook decision the local server returns to `approval-gate.sh`,
+ * The PreToolUse hook decision the local server returns to the approval hook runner,
  * which echoes it verbatim to Claude Code. `allow` lets the order tool run;
  * `deny` blocks it and surfaces `permissionDecisionReason` to the agent.
  */

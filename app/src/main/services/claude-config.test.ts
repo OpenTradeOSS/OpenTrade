@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CLAUDE_DEFAULT_RETENTION_DAYS,
@@ -69,6 +69,6 @@ describe("claudeConfigDir", () => {
   });
 
   test("falls back to ~/.claude", () => {
-    expect(claudeConfigDir({}).endsWith("/.claude")).toBe(true);
+    expect(claudeConfigDir({})).toBe(join(homedir(), ".claude"));
   });
 });

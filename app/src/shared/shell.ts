@@ -1,7 +1,7 @@
 /**
  * Wire contract for the "shell" bridge between the Electron MAIN process and the
  * renderer — main-process UI chrome that needs to steer the renderer. Today that
- * is the macOS menu bar item (§12.6): clicking an agent in the tray menu opens the
+ * is the desktop status item (§12.6): clicking an agent in the tray menu opens the
  * window *and* selects that agent. Like the updater bridge (`shared/updater.ts`),
  * this is main-process state (the tray lives in the launcher, not the host), so it
  * rides `ipcRenderer` rather than tRPC.

@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
-import { CodexClient } from "./codex-app-server";
+import { CodexClient, codexListenUrl } from "./codex-app-server";
 
 /**
  * A scripted stand-in for `codex app-server` on a unix socket: WS-over-UDS,
@@ -61,7 +61,17 @@ afterEach(() => {
 const THREAD = "t-1";
 const idleThread = { thread: { id: THREAD, status: { type: "idle" } } };
 
-describe("CodexClient against a scripted app-server", () => {
+test("normalizes Windows socket paths for the Codex listen URL", () => {
+  const sock = "C:\\Users\\Jane Doe\\app-server-control.sock";
+  expect(codexListenUrl(sock)).toBe("unix://C:/Users/Jane Doe/app-server-control.sock");
+});
+
+// Bun's Windows WebSocket implementation does not honor ws's createConnection
+// option, so these transport tests run on POSIX. The packaged Electron app uses
+// the npm ws implementation; its native Windows socket path is supplied directly.
+const describeSocketTransport = process.platform === "win32" ? describe.skip : describe;
+
+describeSocketTransport("CodexClient against a scripted app-server", () => {
   test("connect + request/response round-trip over the UDS WebSocket", async () => {
     const { sock } = mockServer({
       "thread/loaded/list": (msg, send) =>

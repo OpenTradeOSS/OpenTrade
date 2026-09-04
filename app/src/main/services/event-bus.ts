@@ -25,7 +25,7 @@ export interface AppEvents {
   "audit:changed": { agentId: string | null };
   /** A schedule/monitor was created, deleted, or fired; renderer re-queries the Scheduled view. */
   "scheduler:changed": { agentId: string | null };
-  /** A host-formatted macOS notification; the launcher relay gates it (per-kind
+  /** A host-formatted desktop notification; the launcher relay gates it (per-kind
    *  toggle, per-agent mute, window focus for wakes) and displays it (§12.4). */
   notify: HostNotification;
   /** The durable Recent ring buffer changed — full list, newest first (§12.6). */

@@ -9,15 +9,17 @@
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
+    "predev": "bun run rebuild",
     "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "prepackage": "node scripts/copy-native-modules.mjs",
     "package": "bun run prepackage && electron-vite build && electron-builder --config electron-builder.yml",
+    "package:windows": "bun run package -- --win --x64 --publish never",
     "package:signed": "set -a; [ -f ../.env ] && . ../.env; set +a; bun run package",
     "pack:dir": "bun run prepackage && electron-vite build && electron-builder --dir --config electron-builder.yml",
-    "rebuild": "electron-builder install-app-deps",
+    "rebuild": "electron-rebuild --force --only better-sqlite3",
     "make-icon": "node scripts/make-icon.mjs",
     "db:generate": "drizzle-kit generate"
   },
@@ -65,6 +67,7 @@
     "zustand": "5.0.12"
   },
   "devDependencies": {
+    "@electron/rebuild": "4.0.4",
     "@tailwindcss/vite": "4.2.2",
     "@types/better-sqlite3": "7.6.11",
     "@types/node": "22.10.2",

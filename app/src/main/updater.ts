@@ -1,4 +1,4 @@
-// App updates for the packaged macOS app, via electron-updater against GitHub
+// App updates for the packaged macOS and Windows apps, via electron-updater against GitHub
 // Releases (publish config in electron-builder.yml bakes app-update.yml into the
 // build, which electron-updater reads — no feed URL needed here).
 //
@@ -78,8 +78,9 @@ function wireEvents(): void {
   // User-in-charge: never download or install without an explicit accept.
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  // Differential downloads are flaky on macOS zip updates; full download is robust.
-  autoUpdater.disableDifferentialDownload = true;
+  // Differential downloads are flaky on macOS zip updates; retain efficient
+  // blockmap downloads for the Windows NSIS updater.
+  autoUpdater.disableDifferentialDownload = process.platform === "darwin";
 
   autoUpdater.on("checking-for-update", () => {
     checking = true;
@@ -138,8 +139,9 @@ function errorMessage(err: unknown): string {
   // A release published without a `latest-mac.yml` asset surfaces as a feed error —
   // translate it into something actionable. Match only feed-specific messages (not a
   // bare "404", which can also be a missing zip mid-download).
-  if (/latest-mac\.yml|Cannot parse releases feed|Unable to find latest version/i.test(msg)) {
-    return "No update feed found on the latest release (missing latest-mac.yml). The release may still be building.";
+  if (/latest(?:-mac)?\.yml|Cannot parse releases feed|Unable to find latest version/i.test(msg)) {
+    const feed = process.platform === "darwin" ? "latest-mac.yml" : "latest.yml";
+    return `No update feed found on the latest release (missing ${feed}). The release may still be building.`;
   }
   return msg;
 }

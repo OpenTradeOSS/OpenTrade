@@ -37,7 +37,7 @@ contextBridge.exposeInMainWorld("__opentradeUpdater", {
 });
 
 /**
- * Shell bridge from the MAIN process (menu bar item, §12.6): lets the launcher steer
+ * Shell bridge from the MAIN process (desktop status item, §12.6): lets the launcher steer
  * the renderer — today, "select this agent" after a tray-menu click. See shared/shell.ts.
  */
 contextBridge.exposeInMainWorld("__opentradeShell", {

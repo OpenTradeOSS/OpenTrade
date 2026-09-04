@@ -7,7 +7,7 @@ describe("MonitorRunner", () => {
   test("each stdout line is a trigger, rate-limited to one per window", async () => {
     const triggers: string[] = [];
     const runner = new MonitorRunner({
-      command: "printf 'first\\nsecond\\n'; sleep 5",
+      command: `"${process.execPath}" -e "console.log('first'); console.log('second'); setTimeout(() => {}, 5000)"`,
       cwd: process.cwd(),
       env: { PATH: process.env.PATH ?? "" },
       onTrigger: (line) => triggers.push(line),
@@ -23,7 +23,7 @@ describe("MonitorRunner", () => {
   test("blank lines never trigger", async () => {
     const triggers: string[] = [];
     const runner = new MonitorRunner({
-      command: "printf '\\n   \\n'; sleep 5",
+      command: `"${process.execPath}" -e "console.log(''); console.log('   '); setTimeout(() => {}, 5000)"`,
       cwd: process.cwd(),
       env: { PATH: process.env.PATH ?? "" },
       onTrigger: (line) => triggers.push(line),

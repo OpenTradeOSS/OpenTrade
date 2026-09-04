@@ -117,10 +117,10 @@ function GeneralPanel() {
   return (
     <div className="space-y-8">
       <SettingsSection
-        title="Menu bar"
-        description="Keep an eye on your agents from the macOS menu bar."
+        title="Status area"
+        description="Keep an eye on your agents from the macOS menu bar or Windows system tray."
       >
-        <SettingsRow label="Show OpenTrade in the menu bar">
+        <SettingsRow label="Show OpenTrade in the status area">
           <SettingToggle
             checked={s.showInMenuBar}
             onChange={(showInMenuBar) => update.mutate({ showInMenuBar })}
@@ -459,7 +459,7 @@ function NotificationsPanel() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="Notifications" description="macOS notifications from OpenTrade.">
+      <SettingsSection title="Notifications" description="Desktop notifications from OpenTrade.">
         <SettingsRow
           label="Agent wake-ups"
           hint="A timer or monitor fired and the agent started working. Shown only while OpenTrade is in the background."

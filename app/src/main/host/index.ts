@@ -52,9 +52,13 @@ import { HostTrpcServer } from "./trpc-server";
  * abandoned (both end in `OAUTH_TIMEOUT`).
  */
 function openExternal(url: string): void {
-  const cmd =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  execFile(cmd, [url], (err) => {
+  const command =
+    process.platform === "darwin"
+      ? { file: "open", args: [url] }
+      : process.platform === "win32"
+        ? { file: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url] }
+        : { file: "xdg-open", args: [url] };
+  execFile(command.file, command.args, (err) => {
     if (!err) return;
     hostLog.error("openExternal failed", String(err));
     analytics.trackError("broker", err, "caught", brokerErrorCode(err));

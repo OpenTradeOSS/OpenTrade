@@ -53,13 +53,15 @@ const NOTIFY_TOGGLE: Record<NotificationKind, keyof AppSettings> = {
   update: "notifyUpdates",
 };
 
-/** The macOS menu bar item is a darwin-only affordance (elsewhere the app quits with its
- *  last window anyway). Toggled live by the `showInMenuBar` setting. Off when the host
+/** The macOS menu bar / Windows system tray keeps the launcher reachable while its
+ *  window is closed. Toggled live by the `showInMenuBar` setting. Off when the host
  *  never came up: there's nothing to monitor, and the BackendFailed screen tells the user
  *  to quit + reopen — ⌘Q must really quit for that recovery to work. */
 function menuBarEnabled(): boolean {
   return (
-    process.platform === "darwin" && liveSettings.showInMenuBar && (currentHost?.trpcPort ?? 0) > 0
+    (process.platform === "darwin" || process.platform === "win32") &&
+    liveSettings.showInMenuBar &&
+    (currentHost?.trpcPort ?? 0) > 0
   );
 }
 
@@ -205,6 +207,7 @@ function showAppNotification(kind: NotificationKind, title: string, body: string
 // Key Electron's per-instance state (including the single-instance lock) to this
 // home so parallel dev instances with distinct OPENTRADE_HOME don't collide.
 app.setPath("userData", join(OPENTRADE_HOME, "electron"));
+if (process.platform === "win32") app.setAppUserModelId("ai.exla.opentrade");
 
 if (!app.requestSingleInstanceLock()) {
   // Another OpenTrade GUI is already running for this home — defer to it and exit.
@@ -323,18 +326,19 @@ async function main() {
   });
 }
 
-// macOS: closing the window does not quit the app. The backend host is detached
+// macOS/Windows: closing the window does not quit the app while the status item is
+// enabled. The backend host is detached
 // and survives regardless, so agent sessions keep running with the GUI closed.
 // With the menu bar item on, "no window" also means "no dock icon" — the status
 // item *is* the app until the user opens it again (§12.6).
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-    return;
-  }
   // Same guard as the quit intercept: only go dockless when there's a status item
   // left to reach the app through.
-  if (tray.visible) app.dock?.hide();
+  if (tray.visible) {
+    app.dock?.hide();
+    return;
+  }
+  app.quit();
 });
 
 // A signal is an explicit "exit" from outside — dev.sh, `kill`, the terminal's ^C, a

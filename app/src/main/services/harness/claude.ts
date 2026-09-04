@@ -12,7 +12,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { GATED_TOOL_MATCHER, PREALLOWED_TOOL_PATTERNS } from "@shared/robinhood-tools";
+import { OPENTRADE_HOME } from "../../db/client";
 import { resolveHooksDir } from "../agents/paths";
+import { hookCommand } from "./hook-command";
 import { claudeConfigHasRobinhood } from "./robinhood-mcp";
 import type { Harness, ProbeResult, SessionMode } from "./types";
 
@@ -20,7 +22,7 @@ const execFileAsync = promisify(execFile);
 
 /**
  * The agent-dir `.claude/settings.json` that wires Claude Code's order gate: the
- * PreToolUse hook on the money-moving tools (→ `approval-gate.sh`, the approval card),
+ * PreToolUse hook on the money-moving tools (→ the cross-platform hook runner and approval card),
  * the PostToolUse order-result capture, and the Notification/Stop status hooks, plus
  * the allowlist for reads and cosmetic writes. The matcher and allowlist derive from
  * the classification table in `@shared/robinhood-tools` — the single place the gated
@@ -32,8 +34,9 @@ const execFileAsync = promisify(execFile);
  * `$CLAUDE_PROJECT_DIR` resolves to the agent folder, so the hooks stay agent-scoped
  * (never the user's global `~/.claude`).
  */
-const CLAUDE_SETTINGS_JSON = `${JSON.stringify(
-  {
+function claudeSettingsJson(hooksDir: string, agentId: string): string {
+  return `${JSON.stringify(
+    {
     $schema: "https://json.schemastore.org/claude-code-settings.json",
     enabledMcpjsonServers: ["robinhood", "opentrade"],
     permissions: {
@@ -47,7 +50,7 @@ const CLAUDE_SETTINGS_JSON = `${JSON.stringify(
           hooks: [
             {
               type: "command",
-              command: "$CLAUDE_PROJECT_DIR/.claude/hooks/approval-gate.sh",
+              command: hookCommand(hooksDir, "approval", agentId, OPENTRADE_HOME),
               timeout: 600,
             },
           ],
@@ -57,29 +60,39 @@ const CLAUDE_SETTINGS_JSON = `${JSON.stringify(
         {
           matcher: GATED_TOOL_MATCHER,
           hooks: [
-            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/order-result.sh" },
+            {
+              type: "command",
+              command: hookCommand(hooksDir, "order-result", agentId, OPENTRADE_HOME),
+            },
           ],
         },
       ],
       Notification: [
         {
           hooks: [
-            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
+            {
+              type: "command",
+              command: hookCommand(hooksDir, "status", agentId, OPENTRADE_HOME),
+            },
           ],
         },
       ],
       Stop: [
         {
           hooks: [
-            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
+            {
+              type: "command",
+              command: hookCommand(hooksDir, "status", agentId, OPENTRADE_HOME),
+            },
           ],
         },
       ],
     },
-  },
-  null,
-  2,
-)}\n`;
+    },
+    null,
+    2,
+  )}\n`;
+}
 
 /**
  * `--dangerously-load-development-channels` is a VARIADIC flag (`<servers...>`):
@@ -116,7 +129,7 @@ export const claudeHarness: Harness = {
     return ["--session-id", sessionId, CHANNEL_ARG, ...(kickoff ? [kickoff] : [])];
   },
 
-  writeConfig(agentDir: string): void {
+  writeConfig(agentDir: string, agentId: string): void {
     // Generate the order-gate config in the agent's OWN .claude folder (project-scoped;
     // never the user's global ~/.claude). Runs at scaffold AND before every spawn, so it
     // heals agents that a clean CI build created without the (untracked) template
@@ -125,7 +138,7 @@ export const claudeHarness: Harness = {
     const claudeDir = join(agentDir, ".claude");
     const hooksDir = join(claudeDir, "hooks");
     mkdirSync(hooksDir, { recursive: true });
-    writeFileSync(join(claudeDir, "settings.json"), CLAUDE_SETTINGS_JSON);
+    writeFileSync(join(claudeDir, "settings.json"), claudeSettingsJson(hooksDir, agentId));
     const hooksSrc = resolveHooksDir();
     if (existsSync(hooksSrc)) {
       for (const file of readdirSync(hooksSrc)) {

@@ -84,7 +84,7 @@ describe("spawn-marker", () => {
   test("reconcile SIGTERMs a live orphan, then marks broken + clears", async () => {
     const reg = new FakeRegistry();
     reg.add("a2");
-    const child = spawn("sleep", ["30"]);
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"]);
     await wait(20); // let it come up
     expect(child.pid && isAlive(child.pid)).toBe(true);
     writeSpawnMarker(marker({ agentId: "a2", pid: child.pid ?? 0 }), dir);
