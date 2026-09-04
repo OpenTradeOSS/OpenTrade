@@ -83,6 +83,8 @@ and/or `codex` CLI. An authenticated MCP connection to Robinhood via your agent 
 the [Robinhood MCP](https://robinhood.com/us/en/support/articles/agentic-trading-overview/#ConnectyourAIagent)
 instructions.
 
+Experimental Windows and Linux support can be found in [`experimental/windows-linux-support`](https://github.com/OpenTradeOSS/OpenTrade/tree/experimental/windows-linux-support). Courtesy of [@skyguy126](https://github.com/skyguy126).
+
 ## Build from source
 
 ```bash
