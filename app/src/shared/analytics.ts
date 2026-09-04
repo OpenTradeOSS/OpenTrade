@@ -190,6 +190,13 @@ export const TELEMETRY_EVENTS = {
     offline_ms: z.number().int().nonnegative(),
     failed_polls: z.number().int().nonnegative(),
   }),
+  /**
+   * The poll loop found the stored grant revoked (`invalid_grant` on refresh) and ended
+   * the session itself: tokens dropped, status `disconnected`, Connect CTA back. A
+   * lifecycle event beside `broker_offline`/`broker_online`, so the broker funnel can
+   * count stranded installs without reading error dashboards for `InvalidGrantError`.
+   */
+  broker_session_ended: z.strictObject({ reason: z.enum(["invalid_grant"]) }),
 
   // autonomy
   schedule_created: z.strictObject({

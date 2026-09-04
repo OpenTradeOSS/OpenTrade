@@ -1,3 +1,4 @@
+import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { errorCodeOf } from "@shared/analytics";
 
@@ -45,6 +46,20 @@ export function isTransientNetworkError(err: unknown): boolean {
   const code = errorCodeOf(err);
   if (code && TRANSIENT_NETWORK_CODES.has(code)) return true;
   return err instanceof TypeError && err.message === "fetch failed";
+}
+
+/**
+ * Has the authorization server rejected our refresh token for good? `invalid_grant` is
+ * the one auth failure that is *never* worth retrying: the grant is expired or revoked,
+ * and no amount of waiting brings it back — only a fresh consent does.
+ *
+ * Deliberately narrower than `isReauthRequired` (`robinhood/client.ts`), which also
+ * counts a resource `UnauthorizedError`. That breadth is right when deciding whether to
+ * start a consent the user just asked for; it is wrong on the poll path, where a
+ * transient or endpoint-specific 401 would throw away credentials that still work.
+ */
+export function isDeadGrantError(err: unknown): boolean {
+  return err instanceof InvalidGrantError;
 }
 
 /**

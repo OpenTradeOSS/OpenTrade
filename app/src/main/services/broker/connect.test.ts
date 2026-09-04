@@ -1,5 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { Account, OrderStatus, Portfolio, Position, Quote } from "@shared/broker";
 import { drizzle } from "drizzle-orm/bun-sqlite";
@@ -49,11 +51,18 @@ class FakeAdapter {
       pending.reject(new ConnectSuperseded());
     }
   }
-  /** Land call #i as connected. */
+  /** Land call #i as connected (and store tokens, as a real connect does). */
   succeed(i: number) {
     this.connected = true;
+    this.tokens = true;
     Object.assign(this.calls[i], { done: true });
     this.calls[i].resolve();
+  }
+  /** Stored tokens, so `svc.isAuthorized()` means something: true after a connect
+   *  lands, false after `reset()` drops them. */
+  tokens = false;
+  hasTokens() {
+    return this.tokens;
   }
   fail(i: number, err: unknown) {
     Object.assign(this.calls[i], { done: true });
@@ -67,6 +76,7 @@ class FakeAdapter {
     this.resets++;
     this.cancelConnect();
     this.connected = false;
+    this.tokens = false;
   }
   /** Set to make the service pick an account and start polling. */
   account: Account | null = null;
@@ -414,6 +424,75 @@ describe("BrokerService poll loop — network outages are not app errors", () =>
       error_code: "InternalError",
       source: "caught",
     });
+  });
+
+  test("a revoked grant ends the session instead of retrying it forever", async () => {
+    const { svc, adapter, client } = await connectedWithAccount();
+    // Production shape: the stored refresh token was revoked, so the first poll to use it
+    // throws and every later one throws identically. One install emitted 167 of these in
+    // 26 minutes — one per poll — while its UI still read `connected`.
+    adapter.pollScript = async () => {
+      throw new InvalidGrantError("token revoked");
+    };
+    expect(svc.isAuthorized()).toBe(true);
+    await poll(svc);
+    // Reported once, then the session is over: tokens dropped, so the panel shows the
+    // Connect CTA (a fresh consent) rather than pretending it can reconnect silently.
+    // The end itself is counted, so a stranded install is visible in telemetry.
+    expect(events(client)).toEqual(["app_error", "broker_session_ended"]);
+    expect(client.events[0].properties).toMatchObject({
+      subsystem: "broker",
+      error_name: "InvalidGrantError",
+      source: "caught",
+    });
+    expect(client.events[1].properties).toMatchObject({ reason: "invalid_grant" });
+    expect(svc.getStatus()).toBe("disconnected");
+    expect(adapter.resets).toBe(1);
+    expect(svc.isAuthorized()).toBe(false);
+
+    // And the loop is genuinely stopped — a further poll reports nothing new.
+    await poll(svc);
+    expect(events(client)).toEqual(["app_error", "broker_session_ended"]);
+  });
+
+  test("a revoked grant on the connect-time first poll ends the session without hanging connect()", async () => {
+    const { svc, adapter, client } = setup();
+    adapter.account = { accountNumber: "A1", agentic: true } as Account;
+    // `runConnect` awaits the first poll itself, while `inflight` still holds runConnect.
+    // Ending the session there via `disconnect()` — which awaits `inflight` — waited on
+    // itself: connect() never resolved, status stuck on `connected`, Reset hung too.
+    adapter.pollScript = async () => {
+      throw new InvalidGrantError("token revoked");
+    };
+    const c = svc.connect();
+    await tick();
+    adapter.succeed(0);
+    await c; // hung forever before the fix
+    expect(svc.getStatus()).toBe("disconnected");
+    expect(adapter.resets).toBe(1);
+    expect(events(client)).toEqual([
+      "broker_connect_started",
+      "broker_connected",
+      "app_error",
+      "broker_session_ended",
+    ]);
+    // No poller was started for the session that no longer exists…
+    expect((svc as unknown as { timer: unknown }).timer).toBeNull();
+    // …and the user's Reset still works.
+    await svc.disconnect();
+    expect(svc.getStatus()).toBe("disconnected");
+  });
+
+  test("a 401 mid-session is NOT treated as a dead grant — good tokens are kept", async () => {
+    const { svc, adapter, client } = await connectedWithAccount();
+    // `isReauthRequired` on the connect path also counts UnauthorizedError, but on the
+    // poll path a transient/endpoint-specific 401 must not cost the user their session.
+    adapter.pollScript = async () => {
+      throw new UnauthorizedError("nope");
+    };
+    await poll(svc);
+    expect(events(client)).toEqual(["app_error"]);
+    expect(svc.getStatus()).toBe("connected");
   });
 
   test("disconnect closes the books: no broker_online spanning a deliberate disconnect", async () => {

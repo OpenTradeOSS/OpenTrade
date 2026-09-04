@@ -21,7 +21,7 @@ import { analytics } from "../analytics";
 import { bus } from "../event-bus";
 import type { SettingsService } from "../settings";
 import { type BrokerAdapter, ConnectSuperseded } from "./adapter";
-import { brokerErrorCode, isTransientNetworkError } from "./network-error";
+import { brokerErrorCode, isDeadGrantError, isTransientNetworkError } from "./network-error";
 import { orderNotification, terminalTransition } from "./order-notify";
 
 /**
@@ -208,7 +208,9 @@ export class BrokerService {
       this.setStatus("connected");
       analytics.track("broker_connected");
       await this.pollOnce();
-      this.startPolling();
+      // The first poll can end the session itself (a dead grant → `forgetSession`):
+      // don't start a poller for a session that no longer exists.
+      if (this.status === "connected") this.startPolling();
     } catch (err) {
       // A newer connect took this one over (the user clicked Connect again): not a
       // failure — the newer attempt owns the status now, so leave it and report nothing.
@@ -235,13 +237,27 @@ export class BrokerService {
     // Let the in-flight connect unwind (a superseded one resolves quietly and leaves the
     // status alone — it's ours to set below).
     await this.inflight?.catch(() => {});
+    this.forgetSession();
+  }
+
+  /**
+   * Forget the session: stop polling, clear per-session state, status `disconnected`
+   * (the Connect CTA comes back; the next Connect is a fresh consent), drop the tokens.
+   * Shared by Reset and the poll loop's dead-grant path, which must call this and **not**
+   * `disconnect()`: that awaits `inflight`, and a dead grant can surface on the *first*
+   * poll, which `runConnect` awaits while `inflight` still holds `runConnect` — the await
+   * would wait on itself forever (status stuck on `connected`, Reset hung on it too).
+   * The token drop goes last: it is the one step that touches the DB, so status is
+   * already settled if it throws.
+   */
+  private forgetSession(): void {
     this.stopPolling();
-    this.adapter.reset();
     this.account = null;
     this.ledger.clear();
     this.offlineSince = null; // an outage doesn't span a deliberate disconnect
     this.failedPolls = 0;
     this.setStatus("disconnected");
+    this.adapter.reset();
   }
 
   /** True if we already have tokens and can connect without a browser. */
@@ -373,7 +389,15 @@ export class BrokerService {
       if (this.status !== "connected") return;
       // Network outage (laptop sleep/wake, Wi‑Fi blip) → broker_offline; else app_error.
       if (isTransientNetworkError(err)) this.noteOffline(err);
-      else analytics.trackError("broker", err, "caught", brokerErrorCode(err));
+      else {
+        analytics.trackError("broker", err, "caught", brokerErrorCode(err));
+        // A revoked grant never comes back (`isDeadGrantError`): end the session the way
+        // Reset does, instead of throwing this same error every 5–10 s over stale data.
+        if (isDeadGrantError(err)) {
+          this.forgetSession();
+          analytics.track("broker_session_ended", { reason: "invalid_grant" });
+        }
+      }
     } finally {
       this.polling = false;
     }
