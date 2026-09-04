@@ -21,7 +21,7 @@ const POSTHOG_HOST = "https://r.exla.ai";
 const POSTHOG_UI_HOST = "https://us.posthog.com";
 
 /** The complete set of events this site sends by hand. Pageviews/autocapture are automatic. */
-export type WebsiteEvent = "download_clicked" | "github_clicked";
+export type WebsiteEvent = "download_clicked" | "github_clicked" | "x_clicked";
 
 /**
  * Resolves once the SDK has loaded and initialised; null when analytics is inert.
