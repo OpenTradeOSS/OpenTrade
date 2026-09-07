@@ -4,6 +4,7 @@ import { agentsRouter } from "./agents";
 import { analyticsRouter } from "./analytics";
 import { approvalsRouter } from "./approvals";
 import { brokerRouter } from "./broker";
+import { feedbackRouter } from "./feedback";
 import { notificationsRouter } from "./notifications";
 import { onboardingRouter } from "./onboarding";
 import { scheduleRouter } from "./schedule";
@@ -22,6 +23,7 @@ export const appRouter = router({
   settings: settingsRouter,
   schedule: scheduleRouter,
   analytics: analyticsRouter,
+  feedback: feedbackRouter,
   notifications: notificationsRouter,
 });
 

@@ -3,6 +3,7 @@ import { trpc } from "../../lib/trpc";
 import { cn } from "../../lib/utils";
 import { useConnectionStore } from "../../stores/connection";
 import { type RightTab, useUIStore } from "../../stores/ui";
+import { FeedbackButton } from "../feedback/FeedbackButton";
 import { Activity } from "../panels/Activity";
 import { MarketClock } from "../panels/MarketClock";
 import { MonitorPanel } from "../panels/Monitor";
@@ -70,8 +71,9 @@ export function RightPanel() {
         </TabsContent>
       </Tabs>
 
-      <div className="flex shrink-0 px-4 py-2">
+      <div className="flex shrink-0 items-center justify-between px-4 py-2">
         <BrokerIndicator />
+        <FeedbackButton />
       </div>
     </div>
   );

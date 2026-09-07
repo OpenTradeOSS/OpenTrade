@@ -10,6 +10,11 @@ import {
   type TelemetryEvent,
   type TelemetryProps,
 } from "@shared/analytics";
+import {
+  type FeedbackDiagnostics,
+  FeedbackDiagnostics as FeedbackDiagnosticsSchema,
+  type FeedbackInput,
+} from "@shared/feedback";
 import type { AppSettings } from "@shared/settings";
 import { PostHog } from "posthog-node";
 import type { z } from "zod";
@@ -26,9 +31,20 @@ const POSTHOG_HOST = "https://r.exla.ai";
  * so tests can inject a fake without the SDK or a network path.
  */
 export interface CaptureClient {
-  capture(msg: { distinctId: string; event: string; properties?: Record<string, unknown> }): void;
+  capture(msg: {
+    distinctId: string;
+    event: string;
+    properties?: Record<string, unknown>;
+    uuid?: string;
+  }): void;
+  /** Resolve once queued events are on the wire (rejects on a failed send). Only the
+   *  feedback path awaits it — telemetry stays fire-and-forget. */
+  flush(): Promise<void>;
   shutdown(timeoutMs?: number): Promise<void>;
 }
+
+/** How long `sendFeedback` waits for the flush before reporting failure. */
+const FEEDBACK_FLUSH_TIMEOUT_MS = 8000;
 
 /** Non-telemetry AppSettings keys we surface as `setting_changed`. */
 const REPORTABLE_SETTING_KEYS = [
@@ -196,6 +212,67 @@ export class AnalyticsService {
       source,
       ...(frames.length ? { frames } : {}),
     });
+  }
+
+  /** Whether this build can send feedback at all — i.e. a PostHog client exists. The
+   *  telemetry opt-out is deliberately NOT consulted (see `sendFeedback`). */
+  get feedbackAvailable(): boolean {
+    return this.client !== null;
+  }
+
+  /**
+   * Send an in-app feedback submission (§12.8) as one `feedback_submitted` event. The
+   * one capture that bypasses `track()`: free text, so not allowlisted, and **not gated
+   * by `telemetryEnabled`** — clicking Send is the consent. Same anonymous install id;
+   * nothing `$set` on the person profile. Awaits the flush so the UI gets a real
+   * sent/failed outcome.
+   */
+  async sendFeedback(
+    input: FeedbackInput,
+    diagnostics: FeedbackDiagnostics | null,
+  ): Promise<{ ok: boolean }> {
+    const client = this.client;
+    if (!client) return { ok: false };
+
+    // Wire boundary for the diagnostics block: out-of-schema → dropped, message still goes.
+    const diag = diagnostics ? FeedbackDiagnosticsSchema.safeParse(diagnostics) : null;
+    if (diag && !diag.success) hostLog.warn("feedback: diagnostics failed schema, sending without");
+    const block = diag?.success ? diag.data : null;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      client.capture({
+        // The draft's id: a retry after a timed-out flush (posthog-node keeps retrying in
+        // the background) reuses it, so PostHog dedupes instead of storing two copies.
+        uuid: input.submissionId,
+        distinctId: this.distinctId,
+        event: "feedback_submitted",
+        properties: {
+          message: input.message,
+          ...(input.email ? { email: input.email } : {}),
+          view: input.view,
+          ...(block ?? {}),
+        },
+      });
+      await Promise.race([
+        client.flush(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("flush timeout")), FEEDBACK_FLUSH_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      hostLog.warn(`feedback: send failed: ${String(err)}`);
+      return { ok: false };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    // The usage signal, through the normal allowlist + opt-out gate.
+    this.track("feedback_sent", {
+      with_email: Boolean(input.email),
+      with_diagnostics: block !== null,
+    });
+    return { ok: true };
   }
 
   /** Flush pending events and stop listening. Bounded so host shutdown can't hang. */

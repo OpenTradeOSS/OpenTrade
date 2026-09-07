@@ -19,7 +19,8 @@ export const OPENTRADE_DISCORD_URL = "https://discord.gg/F63YFPRtq";
  * contiguous group of `TELEMETRY_EVENTS`, and a new event there needs a home here:
  *  1. app — `host_started`, `app_opened`, `app_updated`, `update_downloaded`, the
  *     `onboarding_*` funnel, `setting_changed`, `telemetry_enabled|disabled`,
- *     `notification_clicked`, `broker_connected|broker_connect_failed`.
+ *     `notification_clicked`, `broker_connected|broker_connect_failed`, `feedback_sent`
+ *     (usage only — the feedback message itself is not telemetry, §12.8).
  *  2. agents — `agent_created|archived|restarted`, `terminal_session_started|respawned`,
  *     `schedule_created|fired`, `headless_run_finished`, `agent_marked_broken`,
  *     `turn_limit_reached`, and the categorical `order_gate_prompted|decided` +
