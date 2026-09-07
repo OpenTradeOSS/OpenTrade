@@ -230,6 +230,10 @@ export const TELEMETRY_EVENTS = {
   // notifications
   notification_clicked: z.strictObject({ kind: NotificationKind }),
 
+  // in-app feedback usage (§12.8); the message itself is the separate, ungated
+  // `feedback_submitted` event, never this allowlist
+  feedback_sent: z.strictObject({ with_email: z.boolean(), with_diagnostics: z.boolean() }),
+
   // errors (sanitized)
   app_error: z.strictObject({
     subsystem: ErrorSubsystem,

@@ -12,6 +12,7 @@ import {
   TELEMETRY_EVENTS,
   templateOf,
 } from "@shared/analytics";
+import type { FeedbackDiagnostics, FeedbackInput } from "@shared/feedback";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import type { Db } from "../../db/client";
 import * as schema from "../../db/schema";
@@ -30,12 +31,20 @@ interface Captured {
   distinctId: string;
   event: string;
   properties?: Record<string, unknown>;
+  uuid?: string;
 }
 
 class FakeClient implements CaptureClient {
   events: Captured[] = [];
+  flushes = 0;
+  /** Set to make `flush()` reject — simulates a failed send. */
+  flushError: Error | null = null;
   capture(msg: Captured): void {
     this.events.push(msg);
+  }
+  async flush(): Promise<void> {
+    this.flushes++;
+    if (this.flushError) throw this.flushError;
   }
   async shutdown(): Promise<void> {}
 }
@@ -259,6 +268,131 @@ describe("AnalyticsService", () => {
     const err = Object.assign(new Error("x"), { code: "ECONNRESET" });
     svc.trackError("broker", err, "caught", undefined);
     expect(fake.events[0].properties).toMatchObject({ error_code: "ECONNRESET" });
+  });
+});
+
+const DIAG: FeedbackDiagnostics = {
+  app_version: "0.3.0",
+  platform: "darwin",
+  arch: "arm64",
+  os_release: "25.2.0",
+  electron_version: "40.1.0",
+  node_version: "22.20.0",
+  claude_version: "2.0.1 (Claude Code)",
+  codex_version: null,
+  host_uptime_sec: 120,
+  agent_count: 2,
+  agents_claude: 2,
+  agents_codex: 0,
+  agents_working: 1,
+  agents_needs_input: 0,
+  agents_awaiting_approval: 0,
+  agents_broken: 0,
+  agents_auto_mode: 0,
+  agents_turn_limited: 0,
+  agents_active_24h: 2,
+  schedules_enabled: 0,
+  monitors_enabled: 0,
+  broker_status: "connected",
+  broker_authorized: true,
+  broker_portfolio_age_sec: 5,
+  pending_approvals: 0,
+  telemetry_enabled: true,
+  default_approval_mode: "approve",
+  approval_timeout_sec: 300,
+  poll_interval_focused_sec: 5,
+  poll_interval_blurred_sec: 10,
+  headless_turn_limit_enabled: true,
+  max_headless_turns: 20,
+  max_headless_run_minutes: 30,
+  background_allow_api_key: false,
+};
+
+const INPUT: FeedbackInput = {
+  submissionId: "3f1c2b6e-8c1a-4a4b-9d0e-1a2b3c4d5e6f",
+  message: "The portfolio pane is blank after sleep.",
+  email: "someone@example.com",
+  includeDiagnostics: true,
+  view: "agents",
+};
+
+describe("AnalyticsService.sendFeedback", () => {
+  test("no client → unavailable, nothing captured", async () => {
+    const svc = makeService(new SettingsService(memDb()), null);
+    expect(svc.feedbackAvailable).toBe(false);
+    expect(await svc.sendFeedback(INPUT, DIAG)).toEqual({ ok: false });
+  });
+
+  test("sends under the install id even when telemetry is opted out; no usage event then", async () => {
+    const settings = new SettingsService(memDb());
+    settings.update({ telemetryEnabled: false });
+    const fake = new FakeClient();
+    const svc = makeService(settings, fake);
+    expect(svc.feedbackAvailable).toBe(true);
+
+    expect(await svc.sendFeedback(INPUT, DIAG)).toEqual({ ok: true });
+    expect(fake.flushes).toBe(1);
+    // Exactly one event: the feedback itself. `feedback_sent` is telemetry and gated off.
+    expect(fake.events.map((e) => e.event)).toEqual(["feedback_submitted"]);
+    const e = fake.events[0];
+    expect(e.distinctId).toBe(svc.anonymousId);
+    // The draft's id is the event uuid, so a retry after a timeout dedupes in PostHog.
+    expect(e.uuid).toBe(INPUT.submissionId);
+    expect(e.properties).toMatchObject({
+      message: INPUT.message,
+      email: INPUT.email,
+      view: "agents",
+      ...DIAG,
+    });
+    // The email must live on the event only — never on the person profile.
+    expect(e.properties).not.toHaveProperty("$set");
+    expect(e.properties).not.toHaveProperty("$set_once");
+  });
+
+  test("telemetry on → a separate categorical feedback_sent follows, carrying no text", async () => {
+    const fake = new FakeClient();
+    const svc = makeService(new SettingsService(memDb()), fake);
+    expect(await svc.sendFeedback(INPUT, DIAG)).toEqual({ ok: true });
+    expect(fake.events.map((e) => e.event)).toEqual(["feedback_submitted", "feedback_sent"]);
+    const usage = fake.events[1];
+    expect(usage.properties).toMatchObject({ with_email: true, with_diagnostics: true });
+    expect(usage.properties).not.toHaveProperty("message");
+    expect(usage.properties).not.toHaveProperty("email");
+  });
+
+  test("no email + toggle off → neither the email nor any diagnostics field is sent", async () => {
+    const fake = new FakeClient();
+    const svc = makeService(new SettingsService(memDb()), fake);
+    const input: FeedbackInput = {
+      submissionId: INPUT.submissionId,
+      message: "hi",
+      includeDiagnostics: false,
+      view: "settings",
+    };
+    expect(await svc.sendFeedback(input, null)).toEqual({ ok: true });
+    const props = fake.events[0].properties ?? {};
+    expect(Object.keys(props).sort()).toEqual(["message", "view"]);
+    expect(fake.events[1].properties).toMatchObject({ with_email: false, with_diagnostics: false });
+  });
+
+  test("a diagnostics block with an unknown field is dropped, the message still goes", async () => {
+    const fake = new FakeClient();
+    const svc = makeService(new SettingsService(memDb()), fake);
+    const bad = { ...DIAG, home_dir: "/Users/someone" } as unknown as FeedbackDiagnostics;
+    expect(await svc.sendFeedback(INPUT, bad)).toEqual({ ok: true });
+    const props = fake.events[0].properties ?? {};
+    expect(props).not.toHaveProperty("home_dir");
+    expect(props).not.toHaveProperty("app_version");
+    expect(props.message).toBe(INPUT.message);
+    expect(fake.events[1].properties).toMatchObject({ with_diagnostics: false });
+  });
+
+  test("a failed flush reports send_failed and emits no usage event", async () => {
+    const fake = new FakeClient();
+    fake.flushError = new Error("ECONNREFUSED");
+    const svc = makeService(new SettingsService(memDb()), fake);
+    expect(await svc.sendFeedback(INPUT, DIAG)).toEqual({ ok: false });
+    expect(fake.events.map((e) => e.event)).toEqual(["feedback_submitted"]);
   });
 });
 
