@@ -10,12 +10,11 @@ import { CinematicBackground, NoiseOverlay } from "./primitives";
 
 const EASE_OUT_EXPO: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
-// Pinned to a specific release because the asset filename embeds the version, so GitHub's
-// `/releases/latest/download/<name>` permalink would 404 on the next release. Bump this on
-// every release until the DMG gets a version-less `artifactName` in electron-builder.yml,
-// after which the permalink can be used directly. Apple silicon only — no x64 build ships.
+// Version-less permalink: the DMG ships under a fixed `artifactName` (see
+// app/electron-builder.yml), so GitHub resolves this to the newest release's installer and
+// the link never needs bumping. Apple silicon only — no x64 build ships.
 const DOWNLOAD_URL =
-  "https://github.com/OpenTradeOSS/OpenTrade/releases/download/v0.2.6/OpenTrade-0.2.6-arm64.dmg";
+  "https://github.com/OpenTradeOSS/OpenTrade/releases/latest/download/OpenTrade-arm64.dmg";
 
 function GitHubMark({ className }: { className?: string }) {
   return (

@@ -49,6 +49,12 @@ mac:
   # CSC_LINK / CSC_KEY_PASSWORD. See docs/PACKAGING.md.
   notarize: true
 dmg:
+  # Deliberately version-less so the download filename is stable across releases and
+  # GitHub's `/releases/latest/download/<name>` permalink always resolves — the website's
+  # download button points at it and must not need a bump every release. `${arch}` keeps
+  # the name honest if an x64/universal build is added later. The mounted volume still
+  # shows the version via `title` below.
+  artifactName: ${productName}-${arch}.${ext}
   title: OpenTrade ${version}
   contents:
     - x: 130
