@@ -68,7 +68,9 @@ export const settings = sqliteTable("settings", {
 /**
  * Durable cron schedules owned by the backend (survive app close / host restart,
  * unlike Claude Code's session-scoped CronCreate). `next_fire_at` is advisory —
- * the scheduler recomputes it from `cron_expr` on boot rather than trusting it.
+ * the scheduler recomputes it from `cron_expr` (in `timezone`) on boot rather than
+ * trusting it. `timezone` (v6) is the machine's IANA zone when the row was created;
+ * NULL only on pre-v6 rows until the scheduler backfills them at boot.
  */
 export const schedules = sqliteTable(
   "schedules",
@@ -76,6 +78,7 @@ export const schedules = sqliteTable(
     id: text("id").primaryKey(),
     agentId: text("agent_id").notNull(),
     cronExpr: text("cron_expr").notNull(),
+    timezone: text("timezone"),
     prompt: text("prompt").notNull(),
     recurring: integer("recurring", { mode: "boolean" }).notNull().default(true),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),

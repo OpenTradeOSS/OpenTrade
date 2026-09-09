@@ -11,9 +11,10 @@ const scheduler = {
   createCron: (_a: string, input: { cron: string; prompt: string }) => ({
     id: "s1",
     cronExpr: input.cron,
+    timezone: "America/New_York", // host-owned; must never reach the agent
     prompt: input.prompt,
   }),
-  listCron: () => [{ id: "s1" }],
+  listCron: () => [{ id: "s1", timezone: "America/New_York" }],
   listMonitors: () => [],
   deleteCron: () => true,
   createMonitor: (_a: string, input: { command: string }) => ({ id: "m1", command: input.command }),
@@ -58,9 +59,10 @@ describe("/schedules routes", () => {
       body: JSON.stringify({ cron: "0 9 * * *", prompt: "review", recurring: true }),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { id: string; cronExpr: string };
+    const body = (await res.json()) as Record<string, unknown>;
     expect(body.id).toBe("s1");
     expect(body.cronExpr).toBe("0 9 * * *");
+    expect(body).not.toHaveProperty("timezone"); // host-owned, hidden from the agent
   });
 
   test("rejects a malformed cron body (zod)", async () => {
@@ -75,8 +77,9 @@ describe("/schedules routes", () => {
   test("lists cron + monitors", async () => {
     const res = await fetch(`${base}/schedules`, { headers: hdrs });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { cron: unknown[]; monitors: unknown[] };
+    const body = (await res.json()) as { cron: Record<string, unknown>[]; monitors: unknown[] };
     expect(body.cron).toHaveLength(1);
+    expect(body.cron[0]).not.toHaveProperty("timezone"); // hidden from the agent's CronList
     expect(body.monitors).toEqual([]);
   });
 

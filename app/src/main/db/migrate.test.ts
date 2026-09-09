@@ -37,6 +37,7 @@ describe("db migrations", () => {
     expect(columns(db, "agents")).toContain("harness");
     expect(columns(db, "wakes")).toContain("source_id"); // v4
     expect(columns(db, "agents")).toContain("last_turn_at"); // v5
+    expect(columns(db, "schedules")).toContain("timezone"); // v6
     // Whole new tables ride the DDL — no migration, no version bump (§6.3).
     expect(columns(db, "recent_notifications")).toContain("at");
   });
@@ -110,6 +111,34 @@ describe("db migrations", () => {
     const row = db.query("SELECT * FROM wakes WHERE id = 'w1'").get() as Record<string, unknown>;
     expect(row.prompt).toBe("run"); // data survived
     expect(row.source_id).toBeNull(); // pre-v4 rows read NULL, not a bogus id
+  });
+
+  test("v6 adds schedules.timezone to an existing (v5) DB, preserving rows as NULL", () => {
+    const db = new Database(":memory:");
+    const m = wrap(db);
+    // A pre-v6 schedules table (no timezone) with a live cron in it, stamped at v5.
+    db.exec(`CREATE TABLE schedules (
+      id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, cron_expr TEXT NOT NULL,
+      prompt TEXT NOT NULL, recurring INTEGER NOT NULL DEFAULT 1,
+      enabled INTEGER NOT NULL DEFAULT 1, next_fire_at INTEGER,
+      last_fired_at INTEGER, created_at INTEGER NOT NULL
+    );`);
+    db.exec(
+      `INSERT INTO schedules (id, agent_id, cron_expr, prompt, recurring, enabled, created_at)
+       VALUES ('s1', 'a1', '30 5 * * 1-5', 'premarket', 1, 1, 1000)`,
+    );
+    db.exec("PRAGMA user_version = 5");
+    db.exec(SCHEMA_DDL);
+    migrate(m, { fresh: false });
+
+    expect(userVersion(m)).toBe(SCHEMA_VERSION);
+    expect(columns(db, "schedules")).toContain("timezone");
+    const row = db.query("SELECT * FROM schedules WHERE id = 's1'").get() as Record<
+      string,
+      unknown
+    >;
+    expect(row.cron_expr).toBe("30 5 * * 1-5"); // data survived
+    expect(row.timezone).toBeNull(); // the scheduler backfills this at its next boot
   });
 
   test("refuses to open a DB stamped newer than this build (downgrade guard)", () => {

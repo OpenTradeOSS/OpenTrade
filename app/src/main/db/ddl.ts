@@ -61,6 +61,7 @@ export const SCHEMA_DDL = `
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
       cron_expr TEXT NOT NULL,
+      timezone TEXT,
       prompt TEXT NOT NULL,
       recurring INTEGER NOT NULL DEFAULT 1,
       enabled INTEGER NOT NULL DEFAULT 1,

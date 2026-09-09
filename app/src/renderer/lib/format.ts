@@ -110,6 +110,13 @@ export function describeCron(expr: string): string {
   return "Custom";
 }
 
+/** The zone a cron is pinned to, plus a hint when this machine is now in a different one. */
+export function cronZone(timezone: string | null): { value: string; hint: string | null } {
+  if (!timezone) return { value: "—", hint: null };
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return { value: timezone, hint: here !== timezone ? `this machine is in ${here}` : null };
+}
+
 /** Absolute local date + time, e.g. "Jun 24, 9:00 AM". */
 export function dateTime(ts: number | null | undefined): string {
   if (!ts) return "—";

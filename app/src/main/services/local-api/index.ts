@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { PreToolUseDecision } from "@shared/approval";
-import { CronCreateInput, MonitorCreateInput } from "@shared/schedule";
+import { CronCreateInput, MonitorCreateInput, type Schedule } from "@shared/schedule";
 import type { AgentRegistry } from "../agents/registry";
 import type { ApprovalService } from "../approvals";
 import type { BrokerService } from "../broker";
@@ -293,13 +293,13 @@ export class LocalApiServer {
     try {
       if (req.method === "GET" && path === "/schedules") {
         return json(res, 200, {
-          cron: scheduler.listCron(agentId),
+          cron: scheduler.listCron(agentId).map(agentFacingSchedule),
           monitors: scheduler.listMonitors(agentId),
         });
       }
       if (req.method === "POST" && path === "/schedules/cron") {
         const input = CronCreateInput.parse(await readJson(req));
-        return json(res, 200, scheduler.createCron(agentId, input));
+        return json(res, 200, agentFacingSchedule(scheduler.createCron(agentId, input)));
       }
       if (req.method === "POST" && path === "/schedules/monitor") {
         const input = MonitorCreateInput.parse(await readJson(req));
@@ -332,6 +332,12 @@ function deny(reason: string): PreToolUseDecision {
       permissionDecisionReason: reason,
     },
   };
+}
+
+/** The agent's view of a schedule: everything but the host-owned `timezone` (§12.2). */
+function agentFacingSchedule(schedule: Schedule): Omit<Schedule, "timezone"> {
+  const { timezone: _timezone, ...rest } = schedule;
+  return rest;
 }
 
 function header(req: IncomingMessage, name: string): string | null {

@@ -2,20 +2,26 @@ import { Cron } from "croner";
 
 /**
  * Thin wrapper over `croner` holding one live timer per schedule id. 5-field cron
- * expressions in the machine's local timezone (croner's default), so DST shifts
- * are handled by the library. Recurring schedules run forever; one-shot schedules
- * use `maxRuns: 1` and croner auto-stops them after the single occurrence.
+ * expressions, each evaluated in the IANA timezone passed to `arm` (so DST shifts in
+ * that zone are handled by the library). Recurring schedules run forever; one-shot
+ * schedules use `maxRuns: 1` and croner auto-stops them after the single occurrence.
  */
 export class CronTimer {
   private jobs = new Map<string, Cron>();
 
   /**
-   * Arm (or re-arm) a schedule. `onFire` runs on each occurrence. Returns the next
-   * fire time in epoch-ms, or null if the expression never fires again.
+   * Arm (or re-arm) a schedule in `timezone`. `onFire` runs on each occurrence.
+   * Returns the next fire time in epoch-ms, or null if the expression never fires again.
    */
-  arm(id: string, cronExpr: string, recurring: boolean, onFire: () => void): number | null {
+  arm(
+    id: string,
+    cronExpr: string,
+    timezone: string,
+    recurring: boolean,
+    onFire: () => void,
+  ): number | null {
     this.disarm(id);
-    const job = new Cron(cronExpr, recurring ? {} : { maxRuns: 1 }, onFire);
+    const job = new Cron(cronExpr, recurring ? { timezone } : { timezone, maxRuns: 1 }, onFire);
     this.jobs.set(id, job);
     return job.nextRun()?.getTime() ?? null;
   }
