@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import type { Agent } from "@shared/agent";
+import { Cron } from "croner";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import type { Db } from "../../db/client";
 import * as schema from "../../db/schema";
@@ -16,7 +17,7 @@ function memDb(): Db {
   sqlite.exec(`
     CREATE TABLE schedules (
       id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, cron_expr TEXT NOT NULL,
-      prompt TEXT NOT NULL, recurring INTEGER NOT NULL DEFAULT 1,
+      timezone TEXT, prompt TEXT NOT NULL, recurring INTEGER NOT NULL DEFAULT 1,
       enabled INTEGER NOT NULL DEFAULT 1, next_fire_at INTEGER,
       last_fired_at INTEGER, created_at INTEGER NOT NULL);
     CREATE TABLE monitors (
@@ -392,5 +393,86 @@ describe("Scheduler CRUD", () => {
     expect(wakes.length).toBeGreaterThanOrEqual(1);
     expect(wakes[0].sourceKind).toBe("monitor");
     expect(wakes[0].sourceId).toBe(m.id); // links wake → its monitor
+  });
+});
+
+describe("Scheduler cron timezone pinning", () => {
+  let scheduler: Scheduler;
+  afterEach(() => scheduler?.stop());
+
+  const savedTz = process.env.TZ;
+  afterEach(() => {
+    if (savedTz === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTz;
+  });
+
+  const nextIn = (expr: string, timezone: string) =>
+    new Cron(expr, { timezone, paused: true }).nextRun()?.getTime();
+
+  test("createCron stamps the machine's zone at creation and arms in it", () => {
+    process.env.TZ = "Asia/Dubai"; // what `systemTimeZone()` resolves in this process
+    scheduler = makeScheduler();
+    const created = scheduler.createCron("agent1", {
+      cron: "30 5 * * *",
+      prompt: "premarket",
+      recurring: true,
+    });
+    expect(created.timezone).toBe("Asia/Dubai");
+    expect(created.nextFireAt).toBe(nextIn("30 5 * * *", "Asia/Dubai"));
+  });
+
+  test("a stored zone is honoured on boot even when the machine has since moved", () => {
+    const db = memDb();
+    db.insert(schema.schedules)
+      .values({
+        id: "pinned",
+        agentId: "agent1",
+        cronExpr: "30 5 * * *",
+        timezone: "America/Los_Angeles", // authored in LA…
+        prompt: "premarket",
+        recurring: true,
+        enabled: true,
+        nextFireAt: null,
+        lastFiredAt: null,
+        createdAt: 1,
+      })
+      .run();
+    process.env.TZ = "Asia/Dubai"; // …but the host now boots in Dubai
+    scheduler = makeSchedulerOn(db);
+    scheduler.start();
+    const [row] = scheduler.listCron("agent1");
+    expect(row.timezone).toBe("America/Los_Angeles"); // unchanged by the move
+    expect(row.nextFireAt).toBe(nextIn("30 5 * * *", "America/Los_Angeles"));
+    expect(row.nextFireAt).not.toBe(nextIn("30 5 * * *", "Asia/Dubai"));
+  });
+
+  test("start() backfills a pre-v6 row (NULL zone) with the machine's current zone", () => {
+    const db = memDb();
+    for (const [id, enabled] of [
+      ["live", true],
+      ["retired", false],
+    ] as const) {
+      db.insert(schema.schedules)
+        .values({
+          id,
+          agentId: "agent1",
+          cronExpr: "0 9 * * *",
+          timezone: null,
+          prompt: "p",
+          recurring: true,
+          enabled,
+          nextFireAt: null,
+          lastFiredAt: null,
+          createdAt: 1,
+        })
+        .run();
+    }
+    process.env.TZ = "Asia/Tokyo";
+    scheduler = makeSchedulerOn(db);
+    scheduler.start();
+    const rows = db.select().from(schema.schedules).all();
+    expect(rows.map((r) => r.timezone)).toEqual(["Asia/Tokyo", "Asia/Tokyo"]); // both stamped
+    const live = scheduler.listCron("agent1")[0];
+    expect(live.nextFireAt).toBe(nextIn("0 9 * * *", "Asia/Tokyo")); // armed in the stamp
   });
 });

@@ -2,7 +2,7 @@ import type { Monitor, Schedule, Wake } from "@shared/schedule";
 import { ChevronRight, Clock, type LucideIcon, Radio } from "lucide-react";
 import { useState } from "react";
 import { useMonitor } from "../../hooks/useSchedules";
-import { ago, dateTime, describeCron, until } from "../../lib/format";
+import { ago, cronZone, dateTime, describeCron, until } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui";
 import { AutonomyHint } from "../schedule/AutonomyInfo";
@@ -169,6 +169,7 @@ function UpcomingMonitorRow({ monitor }: { monitor: Monitor }) {
 
 /** Expanded cron detail, mirroring the Scheduled pane: prompt + a schedule/run grid. */
 function CronDetail({ schedule }: { schedule: Schedule }) {
+  const zone = cronZone(schedule.timezone);
   return (
     <div className="space-y-3">
       <Field label="Prompt">
@@ -183,6 +184,7 @@ function CronDetail({ schedule }: { schedule: Schedule }) {
             </code>,
             describeCron(schedule.cronExpr),
           ],
+          ["Timezone", zone.value, zone.hint],
           ["Next run", dateTime(schedule.nextFireAt), null],
           ["Last run", dateTime(schedule.lastFiredAt), null],
           ["Created", dateTime(schedule.createdAt), null],

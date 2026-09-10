@@ -8,11 +8,16 @@ import { z } from "zod";
  * live PTY if the GUI is open; else cold: a headless `claude --resume -p` run).
  */
 
-/** A 5-field cron schedule (machine-local timezone), interpreted by `croner`. */
+/**
+ * A 5-field cron schedule interpreted by `croner` in `timezone`, the machine's IANA
+ * zone when it was created (null only on pre-v6 rows not yet backfilled). The zone is
+ * host-owned and user-facing: the agent's view of a schedule omits it.
+ */
 export const Schedule = z.object({
   id: z.string(),
   agentId: z.string(),
   cronExpr: z.string(),
+  timezone: z.string().nullable(),
   prompt: z.string(),
   recurring: z.boolean(),
   enabled: z.boolean(),

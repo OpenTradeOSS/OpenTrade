@@ -6,7 +6,7 @@ import type {
   Schedule,
   Wake,
 } from "@shared/schedule";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import type { Db } from "../../db/client";
 import {
@@ -22,6 +22,7 @@ import type { LocalApiServer } from "../local-api";
 import { buildAgentEnv } from "../terminal/env";
 import { CronTimer } from "./cron-timer";
 import { MonitorRunner } from "./monitor-runner";
+import { systemTimeZone } from "./system-timezone";
 import type { WakeTransport } from "./wake/types";
 
 /**
@@ -45,6 +46,14 @@ export class Scheduler {
 
   /** Load enabled rows and arm their timers / monitor children. */
   start(): void {
+    // Backfill pre-v6 rows with the machine's current zone: until the column existed they
+    // were evaluated in the process's local zone, so this pins the behaviour they had.
+    const bootZone = systemTimeZone();
+    this.db
+      .update(schedulesTable)
+      .set({ timezone: bootZone })
+      .where(isNull(schedulesTable.timezone))
+      .run();
     for (const row of this.db.select().from(schedulesTable).all()) {
       if (!row.enabled) continue;
       // Self-heal a genuinely-orphaned row (agent no longer exists at all) by hard-deleting
@@ -76,7 +85,7 @@ export class Scheduler {
           continue;
         }
       }
-      this.armCron(row.id, row.agentId, row.cronExpr, row.prompt, row.recurring);
+      this.armRow(row);
     }
 
     for (const row of this.db.select().from(monitorsTable).all()) {
@@ -88,7 +97,9 @@ export class Scheduler {
       if (this.registry.executionStateOf(row.agentId) === "broken") continue; // paused (see above)
       this.startMonitor(row.id, row.agentId, row.command);
     }
-    hostLog.info(`scheduler started: ${this.runners.size} monitor(s), crons armed`);
+    hostLog.info(
+      `scheduler started: ${this.runners.size} monitor(s), crons armed (machine tz ${bootZone})`,
+    );
   }
 
   /**
@@ -139,7 +150,7 @@ export class Scheduler {
       .where(eq(schedulesTable.agentId, agentId))
       .all()) {
       if (!row.enabled) continue;
-      this.armCron(row.id, row.agentId, row.cronExpr, row.prompt, row.recurring);
+      this.armRow(row);
     }
     for (const row of this.db
       .select()
@@ -227,12 +238,15 @@ export class Scheduler {
     }
     const id = nanoid();
     const now = Date.now();
+    // Pin the machine's zone the agent authored this in; the agent never names one (§12.2).
+    const timezone = systemTimeZone();
     this.db
       .insert(schedulesTable)
       .values({
         id,
         agentId,
         cronExpr: input.cron,
+        timezone,
         prompt: input.prompt,
         recurring: input.recurring,
         enabled: true,
@@ -241,7 +255,7 @@ export class Scheduler {
         createdAt: now,
       })
       .run();
-    this.armCron(id, agentId, input.cron, input.prompt, input.recurring);
+    this.armCron(id, agentId, input.cron, timezone, input.prompt, input.recurring);
     bus.emitEvent("scheduler:changed", { agentId });
     analytics.track("schedule_created", { kind: "cron", recurring: input.recurring });
     return this.getCron(id)!;
@@ -340,14 +354,21 @@ export class Scheduler {
 
   // ---- internals ----
 
+  /** Arm a stored row in its pinned zone (the fallback only covers a not-yet-backfilled row). */
+  private armRow(row: typeof schedulesTable.$inferSelect): void {
+    const zone = row.timezone ?? systemTimeZone();
+    this.armCron(row.id, row.agentId, row.cronExpr, zone, row.prompt, row.recurring);
+  }
+
   private armCron(
     id: string,
     agentId: string,
     cronExpr: string,
+    timezone: string,
     prompt: string,
     recurring: boolean,
   ): void {
-    const next = this.cron.arm(id, cronExpr, recurring, () => {
+    const next = this.cron.arm(id, cronExpr, timezone, recurring, () => {
       const fired = this.fireTracked(agentId, prompt, "cron", id);
       if (fired) this.markCronFired(id);
       if (recurring) {
@@ -513,6 +534,7 @@ function rowToSchedule(row: typeof schedulesTable.$inferSelect): Schedule {
     id: row.id,
     agentId: row.agentId,
     cronExpr: row.cronExpr,
+    timezone: row.timezone,
     prompt: row.prompt,
     recurring: row.recurring,
     enabled: row.enabled,
