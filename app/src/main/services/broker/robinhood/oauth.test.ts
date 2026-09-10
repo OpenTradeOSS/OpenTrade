@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import type { Db } from "../../../db/client";
 import * as schema from "../../../db/schema";
+import { analytics } from "../../analytics";
 import { BrokerOAuthProvider, ConsentRequired } from "./oauth";
 
 function memDb(): Db {
@@ -10,6 +11,17 @@ function memDb(): Db {
   sqlite.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
   return drizzle(sqlite, { schema }) as unknown as Db;
 }
+
+// Spy on the singleton rather than starting it with a fake client: `start` is idempotent,
+// so in a full-suite run whichever file starts it first owns it and a second fake client
+// would silently receive nothing. The spy asserts the call this file is about.
+let tracked: ReturnType<typeof spyOn<typeof analytics, "track">>;
+beforeEach(() => {
+  tracked = spyOn(analytics, "track").mockImplementation(() => {});
+});
+afterEach(() => {
+  tracked.mockRestore();
+});
 
 function provider() {
   const opened: string[] = [];
@@ -59,5 +71,30 @@ describe("BrokerOAuthProvider", () => {
     p.endAuthorization();
     expect(() => p.redirectToAuthorization(new URL("https://x"))).toThrow(ConsentRequired);
     expect(opened).toHaveLength(1);
+  });
+
+  test("opening the browser reports broker_consent_opened with the budget already spent", () => {
+    const { p, opened } = provider();
+    p.beginAuthorization("http://127.0.0.1:50123/callback");
+    p.redirectToAuthorization(new URL("https://robinhood.com/oauth"));
+
+    expect(opened).toHaveLength(1);
+    const calls = tracked.mock.calls.filter(([event]) => event === "broker_consent_opened");
+    expect(calls).toHaveLength(1);
+    // How much of the consent timeout was gone before the user could act. Bounded by the
+    // test's own runtime, so assert the shape the allowlist requires, not a value.
+    const armed = (calls[0][1] as { armed_ms: number }).armed_ms;
+    expect(Number.isInteger(armed)).toBe(true);
+    expect(armed).toBeGreaterThanOrEqual(0);
+  });
+
+  test("a browser that never opened reports nothing — that's the case the event separates", () => {
+    const { p } = provider();
+    // Silent connect: the gate throws before `openBrowser`, so an OAUTH_TIMEOUT with no
+    // `broker_consent_opened` means the user was never shown a page.
+    expect(() => p.redirectToAuthorization(new URL("https://robinhood.com/oauth"))).toThrow(
+      ConsentRequired,
+    );
+    expect(tracked.mock.calls.filter(([e]) => e === "broker_consent_opened")).toHaveLength(0);
   });
 });
