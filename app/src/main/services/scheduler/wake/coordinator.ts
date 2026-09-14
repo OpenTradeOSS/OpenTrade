@@ -1,4 +1,5 @@
 import type { ExecutionState } from "@shared/agent";
+import type { WakeFailureCategory } from "@shared/analytics";
 import { DEFAULT_SETTINGS } from "@shared/settings";
 import { hostLog } from "../../../host/log";
 import type { AgentRegistry } from "../../agents/registry";
@@ -8,7 +9,9 @@ import type {
   HeadlessExitReason,
   HeadlessWakeStrategy,
   InteractivePush,
+  PendingWake,
   SchedulerControl,
+  WakeResult,
   WakeTransport,
 } from "./types";
 
@@ -75,12 +78,29 @@ interface AgentWriterDeps {
    *  agent's crons + monitors (see {@link SchedulerControl}). No-op until a scheduler binds. */
   onBroken: (id: string) => void;
   onUnbroken: (id: string) => void;
+  /** History recording (§12.2): a row is written when a wake actually STARTS (never at
+   *  enqueue — a wake that is dropped or never drained leaves no row) and settled exactly
+   *  once when it ends. No-ops until a scheduler binds. */
+  recordStarted: (wake: PendingWake, background: boolean) => void;
+  recordFinished: (wake: PendingWake, result: WakeResult) => void;
 }
 
 class AgentWriter {
   private state: WriterState = "OFFLINE";
   /** The one wake queue (FIFO). Advanced on handoff (interactive) or on exit (headless). */
-  private pending: string[] = [];
+  private pending: PendingWake[] = [];
+  /** Warm wakes delivered into the live session whose turn hasn't ended yet. Settled
+   *  `succeeded` by the Stop hook (`onTurnEnded`), `failed` by the StopFailure hook
+   *  (`onTurnFailed`), or `stopped` if the session goes away. */
+  private liveWakes: PendingWake[] = [];
+  /** A StopFailure that fired for the active `-p` child (`onTurnFailed` while
+   *  HEADLESS_RUNNING). The hook lands BEFORE the child exits (the hook script curls the
+   *  host in the foreground and the route settles synchronously), so it's held here and
+   *  applied in `headlessExited` — an otherwise-clean exit settles `failed`, not
+   *  `succeeded`. Cleared on every exit and before every spawn. Known limit: if the host
+   *  took longer than the hook's 5 s curl timeout to answer, the hook is lost and the
+   *  wake reads `succeeded`; a hook arriving after the exit would stamp the NEXT child. */
+  private headApiError?: WakeFailureCategory;
   /** A currently-parked `/wake-stream` long-poll (one poller per agent), or undefined. */
   private interactivePoll?: (prompt: string | null) => void;
   /** Non-channel interactive delivery (codex app-server push). While set, the parked
@@ -104,6 +124,8 @@ class AgentWriter {
   private readonly turnLimitFeatureEnabled: () => boolean;
   private readonly onBroken: (id: string) => void;
   private readonly onUnbroken: (id: string) => void;
+  private readonly recordStarted: AgentWriterDeps["recordStarted"];
+  private readonly recordFinished: AgentWriterDeps["recordFinished"];
 
   constructor(
     private id: string,
@@ -116,6 +138,8 @@ class AgentWriter {
     this.turnLimitFeatureEnabled = deps.turnLimitFeatureEnabled;
     this.onBroken = deps.onBroken;
     this.onUnbroken = deps.onUnbroken;
+    this.recordStarted = deps.recordStarted;
+    this.recordFinished = deps.recordFinished;
     // Seed BROKEN from a boot-time spawn-marker reconcile: single-writer crash recovery
     // sets `executionState = broken` directly, before this coordinator exists. (The
     // scheduler's own boot sweep skips arming a broken agent, so no disarm is needed
@@ -126,18 +150,18 @@ class AgentWriter {
   // ---- producer / consumer ----
 
   /** A wake was produced (cron/monitor fire). Route by state. */
-  enqueue(prompt: string): void {
+  enqueue(wake: PendingWake): void {
     switch (this.state) {
       case "OFFLINE":
-        this.pending.push(prompt);
+        this.pending.push(wake);
         this.startHeadless();
         break;
       case "INTERACTIVE_RUNNING":
-        this.pending.push(prompt);
+        this.pending.push(wake);
         this.serveInteractive(); // hand to a parked poll if one's waiting
         break;
       case "HEADLESS_RUNNING":
-        this.pending.push(prompt); // drains when the active child exits
+        this.pending.push(wake); // drains when the active child exits
         break;
       case "BROKEN":
         // Unresumable; drop. A recurring cron re-fires after a manual Restart.
@@ -186,6 +210,8 @@ class AgentWriter {
     this.push = undefined;
     this.pushInFlight = false;
     this.clearPushRetry();
+    // A warm wake whose turn hadn't ended was cut off with the session.
+    this.settleLive({ outcome: "stopped" });
     // The live writer is gone; the head + any queued wakes re-route to the `-p` transport.
     this.transition("OFFLINE");
     this.drain();
@@ -197,6 +223,7 @@ class AgentWriter {
    *  interactive session itself is torn down by TerminalService, not here. */
   stop(): boolean {
     this.pending = [];
+    this.settleLive({ outcome: "stopped" });
     if (this.interactivePoll) {
       const poll = this.interactivePoll;
       this.interactivePoll = undefined;
@@ -231,7 +258,8 @@ class AgentWriter {
     if (!this.interactivePoll || this.pending.length === 0) return;
     const poll = this.interactivePoll;
     const head = this.pending.shift()!;
-    poll(head); // resolves the parked /wake-stream long-poll; finish() clears the slot
+    this.deliveredLive(head);
+    poll(head.prompt); // resolves the parked /wake-stream long-poll; finish() clears the slot
   }
 
   /** Push-mode delivery: one in-flight push at a time; advance-on-ack; a failed
@@ -242,13 +270,13 @@ class AgentWriter {
     if (!push) return;
     const head = this.pending[0];
     this.pushInFlight = true;
-    push(head).then(
+    push(head.prompt).then(
       (ok) => this.pushSettled(push, head, ok),
       () => this.pushSettled(push, head, false),
     );
   }
 
-  private pushSettled(push: InteractivePush, head: string, ok: boolean): void {
+  private pushSettled(push: InteractivePush, head: PendingWake, ok: boolean): void {
     // A newer push replaced this one (respawn-while-interactive installed a fresh push
     // via onInteractiveUp): the current in-flight state belongs to THAT push, so a stale
     // settle must not clear its `pushInFlight` (which would let a duplicate delivery
@@ -259,7 +287,10 @@ class AgentWriter {
     // the head then belongs to whatever transport took over; don't touch it here.
     if (this.state !== "INTERACTIVE_RUNNING") return;
     if (ok) {
-      if (this.pending[0] === head) this.pending.shift();
+      if (this.pending[0] === head) {
+        this.pending.shift();
+        this.deliveredLive(head); // the app-server accepted the turn
+      }
       this.serveInteractive(); // deliver the next queued wake, if any
       return;
     }
@@ -294,6 +325,7 @@ class AgentWriter {
     }
     this.transition("HEADLESS_RUNNING");
     this.armKillTimer();
+    this.headApiError = undefined; // belongs to the previous child, if ever set
     // Always count the run (no freeze while the feature is off — the count is reset
     // wholesale when the feature is re-enabled, so there's nothing to preserve). The
     // pause NOTIFICATION only makes sense when the feature + the agent's switch are on
@@ -317,7 +349,10 @@ class AgentWriter {
       });
     }
     const head = this.pending[0]; // kept at the head until exit (no lost wake on crash)
-    this.headless.run(this.id, head, (reason) => this.headlessExited(reason));
+    this.recordStarted(head, true);
+    this.headless.run(this.id, head.prompt, (reason, failureCategory) =>
+      this.headlessExited(head, reason, failureCategory),
+    );
   }
 
   /** True when the turn-limit feature is on globally, the agent's own switch is on, and
@@ -342,22 +377,43 @@ class AgentWriter {
     return this.turnBudgetExhausted();
   }
 
-  private headlessExited(reason: HeadlessExitReason): void {
+  /** The `-p` child for `head` ended. Settles its History row, then routes by reason. */
+  private headlessExited(
+    head: PendingWake,
+    reason: HeadlessExitReason,
+    failureCategory?: WakeFailureCategory,
+  ): void {
     this.clearKillTimer();
+    // A StopFailure hook that fired for this child (see `headApiError`): the turn ended
+    // in an API error, whatever the exit code says. Its category is the authoritative
+    // one — the hook's structured `error` beats a stderr-tail guess.
+    const apiError = this.headApiError;
+    this.headApiError = undefined;
     if (this.stopping) {
       // A deliberate user Stop killed the child — don't count it as a resume failure.
       this.stopping = false;
+      this.recordFinished(head, { outcome: "stopped" });
       this.transition("OFFLINE");
       this.drain(); // in case a fresh wake arrived during the stop window
       return;
     }
     if (reason === "spawnFail") {
       // A spawn error is a config fault, not a flaky session: one-strike broken.
+      this.recordFinished(head, {
+        outcome: "failed",
+        failureReason: "spawn_fail",
+        failureCategory,
+      });
       this.pending = [];
       this.transition("BROKEN");
       return;
     }
     if (reason === "resumeFail") {
+      this.recordFinished(head, {
+        outcome: "failed",
+        failureReason: "resume_fail",
+        failureCategory: apiError ?? failureCategory,
+      });
       this.pending.shift(); // drop the failed wake
       this.resumeFailCount += 1;
       if (this.resumeFailCount >= MAX_RESUME_FAILS) {
@@ -370,10 +426,47 @@ class AgentWriter {
       return;
     }
     // ok (clean exit, or the max-runtime backstop): complete the head, drain the next.
+    // An API-error turn exits "ok" too (past the fast-fail window) — StopFailure is what
+    // tells them apart. Routing is unchanged either way: the wake is consumed, not retried.
+    this.recordFinished(
+      head,
+      apiError
+        ? { outcome: "failed", failureReason: "api_error", failureCategory: apiError }
+        : { outcome: "succeeded" },
+    );
     this.resumeFailCount = 0;
     this.pending.shift();
     this.transition("OFFLINE");
     this.drain();
+  }
+
+  // ---- history recording ----
+
+  /** A warm wake entered the live session: record it started and hold it until the
+   *  turn ends (`onTurnEnded`) or the session goes away (`onInteractiveDown` / `stop`). */
+  private deliveredLive(wake: PendingWake): void {
+    this.recordStarted(wake, false);
+    this.liveWakes.push(wake);
+  }
+
+  /** The Stop hook fired: the session finished a turn, so every warm wake delivered so
+   *  far has been consumed — settle them all. (A user message typed before the wake's
+   *  turn ends fires Stop too and settles early; accepted — see docs/TODO.md.) */
+  onTurnEnded(): void {
+    this.settleLive({ outcome: "succeeded" });
+  }
+
+  /** The StopFailure hook fired (instead of Stop): the turn died on an API error. Warm
+   *  wakes settle `failed` now; a running `-p` child's failure is held until its exit. */
+  onTurnFailed(failureCategory: WakeFailureCategory): void {
+    this.settleLive({ outcome: "failed", failureReason: "api_error", failureCategory });
+    if (this.state === "HEADLESS_RUNNING") this.headApiError = failureCategory;
+  }
+
+  private settleLive(result: WakeResult): void {
+    const live = this.liveWakes;
+    this.liveWakes = [];
+    for (const w of live) this.recordFinished(w, result);
   }
 
   private armKillTimer(): void {
@@ -461,14 +554,25 @@ export class WakeCoordinator implements WakeTransport {
         turnLimitFeatureEnabled: this.turnLimitFeatureEnabled,
         onBroken: (aid) => this.scheduler?.disarmAgent(aid),
         onUnbroken: (aid) => this.scheduler?.rearmAgent(aid),
+        recordStarted: (wake, background) => this.scheduler?.wakeStarted(wake, background),
+        recordFinished: (wake, result) => this.scheduler?.wakeFinished(wake, result),
       });
       this.writers.set(id, w);
     }
     return w;
   }
 
-  enqueue(agentId: string, prompt: string): void {
-    this.writer(agentId).enqueue(prompt);
+  enqueue(agentId: string, wake: PendingWake): void {
+    this.writer(agentId).enqueue(wake);
+  }
+
+  onTurnEnded(agentId: string): void {
+    // No writer ⇒ no warm wake was ever delivered; a user-turn Stop is a no-op.
+    this.writers.get(agentId)?.onTurnEnded();
+  }
+
+  onTurnFailed(agentId: string, failureCategory: WakeFailureCategory): void {
+    this.writers.get(agentId)?.onTurnFailed(failureCategory);
   }
 
   wouldDropWake(agentId: string): boolean {

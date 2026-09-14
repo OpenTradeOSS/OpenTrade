@@ -1,6 +1,10 @@
 import { FeedbackInput } from "@shared/feedback";
 import { analytics } from "../../services/analytics";
-import { buildDiagnostics, cliVersionOf } from "../../services/feedback/diagnostics";
+import {
+  buildDiagnostics,
+  cliVersionOf,
+  WAKE_STATS_WINDOW_MS,
+} from "../../services/feedback/diagnostics";
 import { harnessFor } from "../../services/harness";
 import { buildAgentEnv } from "../../services/terminal/env";
 import { publicProcedure, router } from "../trpc";
@@ -22,6 +26,7 @@ export const feedbackRouter = router({
         agents: ctx.registry.list(),
         crons: ctx.scheduler.listAllCron().length,
         monitors: ctx.scheduler.listAllMonitors().length,
+        wakes: ctx.scheduler.wakeStats(Date.now() - WAKE_STATS_WINDOW_MS),
         brokerStatus: ctx.broker.getStatus(),
         brokerAuthorized: ctx.broker.isAuthorized(),
         portfolioFetchedAt: ctx.broker.getCachedPortfolio()?.fetchedAt ?? null,

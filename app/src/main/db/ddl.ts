@@ -87,7 +87,11 @@ export const SCHEMA_DDL = `
       source_id TEXT,
       prompt TEXT NOT NULL,
       background INTEGER NOT NULL,
-      fired_at INTEGER NOT NULL
+      fired_at INTEGER NOT NULL,
+      outcome TEXT,
+      finished_at INTEGER,
+      failure_reason TEXT,
+      failure_category TEXT
     );
     CREATE INDEX IF NOT EXISTS wakes_agent_fired ON wakes (agent_id, fired_at);
     CREATE TABLE IF NOT EXISTS recent_notifications (

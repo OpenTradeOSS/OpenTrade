@@ -6,6 +6,7 @@ import type { AgentRegistry } from "../agents/registry";
 import type { ApprovalService } from "../approvals";
 import type { BrokerService } from "../broker";
 import type { Scheduler } from "../scheduler";
+import { categoryForStopFailure } from "../scheduler/wake/failure-category";
 import type { WakeTransport } from "../scheduler/wake/types";
 import type { StatusArbiter } from "../status/arbiter";
 
@@ -233,13 +234,20 @@ export class LocalApiServer {
       // which is exactly what "last active" should track — a user message produces
       // neither, so typing at an agent never moves its timestamp (§12.6). Codex
       // fires Stop only (it has no Notification event); claude fires both.
-      if (event === "Notification" || event === "Stop") {
+      // StopFailure (claude-only) fires INSTEAD of Stop when the turn ends in an API
+      // error — same "turn is over" bookkeeping as Stop, but the outstanding wake failed.
+      const turnEnded = event === "Stop" || event === "StopFailure";
+      if (event === "Notification" || turnEnded) {
         this.registry.markAgentTurn(agentId);
       }
       if (event === "Notification") {
         this.deps.arbiter.setNeedsInput(agentId, true);
-      } else if (event === "Stop") {
+      } else if (turnEnded) {
         this.deps.arbiter.setNeedsInput(agentId, false);
+        // A wake delivered into this session has now been consumed: settle its History
+        // row (§12.2). No-op when no wake is outstanding (a plain user turn).
+        if (event === "Stop") this.wake?.onTurnEnded(agentId);
+        else this.wake?.onTurnFailed(agentId, categoryForStopFailure(String(body?.error ?? "")));
         // Session capture is claude-only: for codex, `lastSessionId` is the
         // app-server THREAD id (minted by thread/start and adopted from the TUI,
         // §13) — codex's hook `session_id` is not verified to match it, and an

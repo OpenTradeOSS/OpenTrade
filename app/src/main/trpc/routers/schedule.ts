@@ -11,10 +11,11 @@ export const scheduleRouter = router({
     monitors: ctx.scheduler.listAllMonitors(),
   })),
 
-  /** One agent's upcoming schedules/monitors + recorded wakes, for the Run History pane. */
+  /** One agent's schedules/monitors (**retired included** — the panel filters `enabled`
+   *  for its Active list and resolves History rows' triggers from the same arrays) +
+   *  its recorded wakes, for the Monitor tab. */
   forAgent: publicProcedure.input(z.object({ agentId: z.string() })).query(({ ctx, input }) => ({
-    schedules: ctx.scheduler.listCron(input.agentId),
-    monitors: ctx.scheduler.listMonitors(input.agentId),
+    ...ctx.scheduler.listTriggers(input.agentId),
     wakes: ctx.scheduler.listWakes(input.agentId),
   })),
 

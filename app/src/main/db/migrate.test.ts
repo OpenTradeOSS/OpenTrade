@@ -38,6 +38,7 @@ describe("db migrations", () => {
     expect(columns(db, "wakes")).toContain("source_id"); // v4
     expect(columns(db, "agents")).toContain("last_turn_at"); // v5
     expect(columns(db, "schedules")).toContain("timezone"); // v6
+    expect(columns(db, "wakes")).toContain("outcome"); // v7
     // Whole new tables ride the DDL — no migration, no version bump (§6.3).
     expect(columns(db, "recent_notifications")).toContain("at");
   });
@@ -139,6 +140,33 @@ describe("db migrations", () => {
     >;
     expect(row.cron_expr).toBe("30 5 * * 1-5"); // data survived
     expect(row.timezone).toBeNull(); // the scheduler backfills this at its next boot
+  });
+
+  test("v7 adds the wake outcome columns to an existing (v6) DB, preserving rows as NULL", () => {
+    const db = new Database(":memory:");
+    const m = wrap(db);
+    // A pre-v7 wakes table (through source_id) with a recorded fire in it, stamped at v6.
+    db.exec(`CREATE TABLE wakes (
+      id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_kind TEXT NOT NULL,
+      source_id TEXT, prompt TEXT NOT NULL, background INTEGER NOT NULL,
+      fired_at INTEGER NOT NULL
+    );`);
+    db.exec(
+      `INSERT INTO wakes (id, agent_id, source_kind, source_id, prompt, background, fired_at)
+       VALUES ('w1', 'a1', 'cron', 's1', 'run', 1, 1000)`,
+    );
+    db.exec("PRAGMA user_version = 6");
+    db.exec(SCHEMA_DDL);
+    migrate(m, { fresh: false });
+
+    expect(userVersion(m)).toBe(SCHEMA_VERSION);
+    for (const c of ["outcome", "finished_at", "failure_reason", "failure_category"]) {
+      expect(columns(db, "wakes")).toContain(c);
+    }
+    const row = db.query("SELECT * FROM wakes WHERE id = 'w1'").get() as Record<string, unknown>;
+    expect(row.source_id).toBe("s1"); // data survived
+    expect(row.outcome).toBeNull(); // pre-v7 rows have no known outcome
+    expect(row.finished_at).toBeNull();
   });
 
   test("refuses to open a DB stamped newer than this build (downgrade guard)", () => {

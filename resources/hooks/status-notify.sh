@@ -1,9 +1,11 @@
 #!/bin/bash
-# OpenTrade status hook (Notification / Stop).
+# OpenTrade status hook (Notification / Stop / StopFailure).
 #
 # Forwards the Claude Code hook payload to the app's local server, which dispatches
 # on hook_event_name: Notification → needs-input; Stop → clears needs-input + captures
-# session_id for the Resume button. Fire-and-forget with a short timeout so it never
+# session_id for the Resume button; StopFailure (fires instead of Stop on an API-error
+# turn) → the same, plus the outstanding wake is recorded as failed with the payload's
+# error category. Fire-and-forget with a short timeout so it never
 # delays Claude Code; always exits 0.
 
 INPUT=$(cat)

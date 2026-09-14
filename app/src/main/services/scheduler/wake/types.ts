@@ -1,3 +1,6 @@
+import type { WakeFailureCategory } from "@shared/analytics";
+import type { WakeFailureReason, WakeOutcome } from "@shared/schedule";
+
 /**
  * The wake-delivery seam. `Scheduler` enqueues via `enqueue`; the `/wake-stream`
  * long-poll consumes via `awaitPoll`; `TerminalService` reports PTY up/down. The
@@ -7,8 +10,18 @@
  */
 export interface WakeTransport {
   /** Enqueue a wake for an agent. Drained via the channel (a live PTY exists) or a
-   *  headless `-p` child (none). Never blocks, never throws. */
-  enqueue(agentId: string, prompt: string): void;
+   *  headless `-p` child (none). Never blocks, never throws. Nothing is recorded here:
+   *  the history row is written by the coordinator the moment the wake actually
+   *  starts (`SchedulerControl.wakeStarted`), so a wake that never runs leaves no row. */
+  enqueue(agentId: string, wake: PendingWake): void;
+  /** The agent's turn ended (the Stop status hook, §6.7). Settles every warm wake
+   *  delivered into the live session as `succeeded`. No-op when none is outstanding. */
+  onTurnEnded(agentId: string): void;
+  /** The agent's turn ended in an API error (Claude Code's `StopFailure` hook, which
+   *  fires INSTEAD of Stop). Settles every outstanding warm wake as `failed`; for a
+   *  headless run still in flight, the failure is held so the child's exit settles
+   *  `failed` rather than `succeeded`. No-op when nothing is outstanding. */
+  onTurnFailed(agentId: string, failureCategory: WakeFailureCategory): void;
   /** Would a wake for this agent be dropped rather than delivered (session BROKEN, or
    *  out of background turns)? The Scheduler checks this to skip firing a paused agent —
    *  no wake notification, history row, or enqueue — instead of firing then dropping. */
@@ -47,7 +60,37 @@ export interface SchedulerControl {
   disarmAgent(agentId: string): void;
   /** Re-arm this agent's still-enabled crons + monitors (Restart / recovery). */
   rearmAgent(agentId: string): void;
+  /** The wake actually started: a headless child spawned, or the live session accepted
+   *  it. Writes the History row (`outcome = running`) + the wake notification. */
+  wakeStarted(wake: PendingWake, background: boolean): void;
+  /** The started wake settled. Called exactly once per `wakeStarted`. */
+  wakeFinished(wake: PendingWake, result: WakeResult): void;
 }
+
+/** A wake produced by the scheduler, carried through the coordinator's queue. `id` is
+ *  minted at fire time and becomes the History row's id once the wake starts. */
+export interface PendingWake {
+  id: string;
+  agentId: string;
+  prompt: string;
+  sourceKind: "cron" | "monitor";
+  /** The originating schedule/monitor id (joined with `sourceKind`). */
+  sourceId: string;
+}
+
+/** How a started wake settled (see `WakeOutcome` in `@shared/schedule`). */
+export interface WakeResult {
+  outcome: Exclude<WakeOutcome, "running">;
+  failureReason?: WakeFailureReason;
+  failureCategory?: WakeFailureCategory;
+}
+
+/** A headless strategy's exit report: how the child ended and, for a failure, the
+ *  category classified from its error text (when one was recognized). */
+export type HeadlessExit = (
+  reason: HeadlessExitReason,
+  failureCategory?: WakeFailureCategory,
+) => void;
 
 /**
  * Interactive wake delivery for a non-channel harness (codex): deliver the RAW wake
@@ -68,7 +111,7 @@ export interface HeadlessWakeStrategy {
   /** Spawn the headless child for the head wake. Reports its terminal outcome via
    *  `onExit` (called exactly once). Never blocks — the run is fire-and-forget; the
    *  coordinator owns the max-runtime kill timer. */
-  run(agentId: string, prompt: string, onExit: (reason: HeadlessExitReason) => void): void;
+  run(agentId: string, prompt: string, onExit: HeadlessExit): void;
   /** SIGTERM the active headless run for an agent, if any. Returns whether one died. */
   stop(agentId: string): boolean;
   /** SIGTERM every live headless child + clear its marker (clean host shutdown). */

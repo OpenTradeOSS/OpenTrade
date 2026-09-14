@@ -1,6 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { WakeFailureCategory } from "@shared/analytics";
 import { hostLog } from "../../../host/log";
 import type { AgentRegistry } from "../../agents/registry";
 import { analytics } from "../../analytics";
@@ -10,7 +9,7 @@ import { buildAgentEnv } from "../../terminal/env";
 import { classifyWakeFailure } from "./failure-category";
 import { formatWakePrompt } from "./prompt";
 import { clearSpawnMarker, writeSpawnMarker } from "./spawn-marker";
-import type { HeadlessExitReason, HeadlessWakeStrategy } from "./types";
+import type { HeadlessExit, HeadlessWakeStrategy } from "./types";
 
 /** A `--resume` of an unresumable session errors out almost immediately; a
  *  non-zero exit within this window is reported as a resume failure (→ the
@@ -49,7 +48,7 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
      *  `ANTHROPIC_API_KEY` from its env) rather than bill the API. Read live from
      *  settings so a toggle applies to the next run without a restart. Defaults to
      *  subscription (the safe, no-surprise-bill default). */
-    private useSubscriptionAuth: () => boolean = () => true,
+    private subscriptionAuthEnabled: () => boolean = () => true,
   ) {}
 
   /** EC1 "Stop task" / max-runtime kill: SIGTERM the running headless child; its exit
@@ -83,7 +82,7 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
     this.children.clear();
   }
 
-  run(agentId: string, prompt: string, onExit: (reason: HeadlessExitReason) => void): void {
+  run(agentId: string, prompt: string, onExit: HeadlessExit): void {
     const agent = this.registry.get(agentId);
     // Archived/missing agent — nothing to run; report a clean completion so the
     // coordinator releases the head and returns to OFFLINE.
@@ -116,7 +115,7 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
     // needs no prefix: it self-identifies as `<channel source="opentrade">`.
     const startedAt = Date.now();
     const wakePrompt = formatWakePrompt(prompt, startedAt);
-    const stripEnvKeys = this.useSubscriptionAuth() ? harness.subscriptionAuthStrip : [];
+    const stripEnvKeys = this.subscriptionAuthEnabled() ? harness.subscriptionAuthStrip : [];
     // This strategy is the CLI-child transport; the routing strategy only sends it
     // harnesses whose headless transport IS a CLI child (i.e. defines headlessArgs).
     if (!harness.headlessArgs) {
@@ -152,17 +151,14 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
 
     // Report the outcome exactly once (error and exit can't both meaningfully fire).
     let settled = false;
-    const settle = (reason: HeadlessExitReason, failureCategory?: WakeFailureCategory) => {
+    const settle: HeadlessExit = (reason, failureCategory) => {
       if (settled) return;
       settled = true;
       this.children.delete(agentId);
       clearSpawnMarker(agentId);
-      analytics.track("headless_run_finished", {
-        result: reason === "ok" ? "ok" : reason === "resumeFail" ? "resume_fail" : "spawn_fail",
-        duration_ms: Math.max(0, Date.now() - startedAt),
-        ...(failureCategory ? { failure_category: failureCategory } : {}),
-      });
-      onExit(reason);
+      // The outcome is tracked once the coordinator settles the wake (`wake_finished`,
+      // §12.2) — it sees the StopFailure hook too, which this exit site can't.
+      onExit(reason, failureCategory);
     };
 
     child.on("error", (err) => {

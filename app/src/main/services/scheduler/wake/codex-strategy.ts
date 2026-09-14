@@ -1,5 +1,4 @@
 import { basename } from "node:path";
-import type { WakeFailureCategory } from "@shared/analytics";
 import { hostLog } from "../../../host/log";
 import type { AgentRegistry } from "../../agents/registry";
 import { analytics } from "../../analytics";
@@ -12,7 +11,7 @@ import {
 import { classifyWakeFailure } from "./failure-category";
 import { formatWakePrompt } from "./prompt";
 import { clearSpawnMarker, writeSpawnMarker } from "./spawn-marker";
-import type { HeadlessExitReason, HeadlessWakeStrategy } from "./types";
+import type { HeadlessExit, HeadlessWakeStrategy } from "./types";
 
 /**
  * The codex headless transport: instead of spawning a one-shot CLI child, a wake
@@ -31,7 +30,7 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
     private manager: CodexAppServerManager,
   ) {}
 
-  run(agentId: string, prompt: string, onExit: (reason: HeadlessExitReason) => void): void {
+  run(agentId: string, prompt: string, onExit: HeadlessExit): void {
     const agent = this.registry.get(agentId);
     if (!agent || agent.archivedAt !== null) {
       onExit("ok");
@@ -46,17 +45,13 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
     const startedAt = Date.now();
 
     let settled = false;
-    const settle = (reason: HeadlessExitReason, failureCategory?: WakeFailureCategory) => {
+    const settle: HeadlessExit = (reason, failureCategory) => {
       if (settled) return;
       settled = true;
       this.active.delete(agentId);
       clearSpawnMarker(agentId);
-      analytics.track("headless_run_finished", {
-        result: reason === "ok" ? "ok" : reason === "resumeFail" ? "resume_fail" : "spawn_fail",
-        duration_ms: Math.max(0, Date.now() - startedAt),
-        ...(failureCategory ? { failure_category: failureCategory } : {}),
-      });
-      onExit(reason);
+      // The outcome is tracked once the coordinator settles the wake (`wake_finished`, §12.2).
+      onExit(reason, failureCategory);
     };
 
     void (async () => {
@@ -148,7 +143,7 @@ export class HarnessRoutingHeadlessStrategy implements HeadlessWakeStrategy {
     return this.registry.get(agentId)?.harness === "codex" ? this.codex : this.claude;
   }
 
-  run(agentId: string, prompt: string, onExit: (reason: HeadlessExitReason) => void): void {
+  run(agentId: string, prompt: string, onExit: HeadlessExit): void {
     this.pick(agentId).run(agentId, prompt, onExit);
   }
 

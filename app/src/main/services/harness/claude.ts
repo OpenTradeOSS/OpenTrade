@@ -21,7 +21,7 @@ const execFileAsync = promisify(execFile);
 /**
  * The agent-dir `.claude/settings.json` that wires Claude Code's order gate: the
  * PreToolUse hook on the money-moving tools (→ `approval-gate.sh`, the approval card),
- * the PostToolUse order-result capture, and the Notification/Stop status hooks, plus
+ * the PostToolUse order-result capture, and the Notification/Stop/StopFailure status hooks, plus
  * the allowlist for reads and cosmetic writes. The matcher and allowlist derive from
  * the classification table in `@shared/robinhood-tools` — the single place the gated
  * set is maintained. Generated IN CODE (not copied from the template): the
@@ -69,6 +69,16 @@ const CLAUDE_SETTINGS_JSON = `${JSON.stringify(
         },
       ],
       Stop: [
+        {
+          hooks: [
+            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
+          ],
+        },
+      ],
+      // Fires INSTEAD of Stop when the turn ends in an API error (billing, auth, rate
+      // limit, server/connection failure). Same forwarder: the host reads
+      // `hook_event_name` + `error` and settles the outstanding wake as failed (§12.2).
+      StopFailure: [
         {
           hooks: [
             { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
