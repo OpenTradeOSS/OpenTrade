@@ -13,8 +13,10 @@ export function useSchedules() {
 }
 
 /**
- * One agent's upcoming schedules/monitors + recorded wakes for the Monitor tab,
- * live via the same `scheduler:changed` subscription. No-ops until an agent is selected.
+ * One agent's schedules/monitors (retired included — the panel filters `enabled` for
+ * Active and resolves History rows' triggers from the same arrays) + recorded wakes for
+ * the Monitor tab, live via the same `scheduler:changed` subscription. No-ops until an
+ * agent is selected.
  */
 export function useMonitor(agentId?: string) {
   const utils = trpc.useUtils();

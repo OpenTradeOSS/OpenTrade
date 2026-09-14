@@ -1,5 +1,13 @@
+import type { WakeFailureCategory } from "@shared/analytics";
 import type { Monitor, Schedule, Wake } from "@shared/schedule";
-import { ChevronRight, Clock, type LucideIcon, Radio } from "lucide-react";
+import {
+  ChevronRight,
+  CircleAlert,
+  Clock,
+  LoaderCircle,
+  type LucideIcon,
+  Radio,
+} from "lucide-react";
 import { useState } from "react";
 import { useMonitor } from "../../hooks/useSchedules";
 import { ago, cronZone, dateTime, describeCron, until } from "../../lib/format";
@@ -17,13 +25,16 @@ import { Badge } from "../ui/badge";
 /** This agent's scheduled runs and the wakes they've fired. */
 export function MonitorPanel() {
   const agentId = useUIStore((s) => s.selectedAgentId) ?? undefined;
+  // `schedules`/`monitors` include RETIRED rows so History can still resolve a fire's
+  // trigger; Active shows only the live ones.
   const { schedules, monitors, wakes } = useMonitor(agentId);
   const [historyOpen, setHistoryOpen] = useState(true);
   // Soonest-first so the next wake leads; never-scheduled (null) sinks to the bottom.
-  const upcomingCrons = [...schedules].sort(
-    (a, b) => (a.nextFireAt ?? Infinity) - (b.nextFireAt ?? Infinity),
-  );
-  const hasUpcoming = upcomingCrons.length > 0 || monitors.length > 0;
+  const upcomingCrons = schedules
+    .filter((s) => s.enabled)
+    .sort((a, b) => (a.nextFireAt ?? Infinity) - (b.nextFireAt ?? Infinity));
+  const liveMonitors = monitors.filter((m) => m.enabled);
+  const hasUpcoming = upcomingCrons.length > 0 || liveMonitors.length > 0;
 
   if (!agentId) {
     return <p className="p-4 text-sm text-muted-foreground">Select an agent.</p>;
@@ -37,7 +48,7 @@ export function MonitorPanel() {
           {upcomingCrons.map((s) => (
             <UpcomingCronRow key={s.id} schedule={s} />
           ))}
-          {monitors.map((m) => (
+          {liveMonitors.map((m) => (
             <UpcomingMonitorRow key={m.id} monitor={m} />
           ))}
         </div>
@@ -60,7 +71,7 @@ export function MonitorPanel() {
         (wakes.length > 0 ? (
           <div className="flex flex-col">
             {wakes.map((w) => (
-              <WakeRow key={w.id} wake={w} />
+              <WakeRow key={w.id} wake={w} schedules={schedules} monitors={monitors} />
             ))}
           </div>
         ) : (
@@ -257,33 +268,144 @@ function DetailGrid({ rows }: { rows: DetailRow[] }) {
   );
 }
 
-/** A recorded wake: which trigger fired, its prompt, and how long ago. */
-function WakeRow({ wake }: { wake: Wake }) {
+/** Placeholder for a detail that can't be resolved. */
+const DASH = <p className="text-xs text-muted-foreground">—</p>;
+
+/**
+ * A recorded wake: which trigger kind fired, how it went (the state icon), and how long
+ * ago. Expands to the fire's details and the timer/monitor that fired it, looked up by
+ * `sourceId` in the agent's (retired-inclusive) `schedules`/`monitors` — a retired
+ * trigger still resolves (§12.2 retire-not-delete). Title stays "Timer fired" /
+ * "Monitor fired" so the list scans by kind; the trigger's own name is in the body.
+ */
+function WakeRow({
+  wake,
+  schedules,
+  monitors,
+}: {
+  wake: Wake;
+  schedules: Schedule[];
+  monitors: Monitor[];
+}) {
+  const [open, setOpen] = useState(false);
   const isMonitor = wake.sourceKind === "monitor";
+  const marker = wakeMarker(wake);
+  // Undefined for pre-link rows (no sourceId) or a source hard-deleted by the boot
+  // orphan self-heal — rendered as a dash below.
+  const schedule = isMonitor ? undefined : schedules.find((s) => s.id === wake.sourceId);
+  const monitor = isMonitor ? monitors.find((m) => m.id === wake.sourceId) : undefined;
   return (
-    <div className="flex items-start gap-2 border-t border-border py-2 text-sm first:border-t-0">
-      <span className="flex h-5 w-3.5 shrink-0 items-center justify-center">
-        {isMonitor ? (
-          <Radio className="size-3.5 text-emerald-400" />
-        ) : (
-          <Clock className="size-3.5 text-sky-400" />
-        )}
-      </span>
-      <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-foreground">
-            {wake.sourceKind === "monitor" ? "Monitor fired" : "Timer fired"}
-          </span>
-          {wake.background && (
-            <Badge variant="muted" className="px-1.5 py-0 text-[10px] font-normal">
-              Background
-            </Badge>
+    <div className="border-t border-border first:border-t-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="group flex w-full items-start gap-2 py-2 text-left text-sm"
+      >
+        <RowMarker icon={marker.icon} tone={marker.tone} open={open} />
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-foreground">
+              {isMonitor ? "Monitor fired" : "Timer fired"}
+            </span>
+            {wake.background && (
+              <Badge variant="muted" className="px-1.5 py-0 text-[10px] font-normal">
+                Background
+              </Badge>
+            )}
+          </div>
+          <span className="shrink-0 text-[11px] text-muted-foreground">{ago(wake.firedAt)}</span>
+        </div>
+      </button>
+      {open && (
+        <div className="mb-3 ml-5 mt-1.5 space-y-3">
+          <DetailGrid rows={[["Fired", dateTime(wake.firedAt), null], outcomeRow(wake)]} />
+          {/* The trigger itself — just its prompt (timer) or command (monitor); the
+              cadence/run timestamps live on the Active row, not here. */}
+          {isMonitor ? (
+            <>
+              {monitor?.description && (
+                <Field label="Description">
+                  <p className="text-sm text-foreground">{monitor.description}</p>
+                </Field>
+              )}
+              <Field label="Command">
+                {monitor ? <CodeBlock>{monitor.command}</CodeBlock> : DASH}
+              </Field>
+            </>
+          ) : (
+            <Field label="Prompt">
+              {schedule ? <CodeBlock>{schedule.prompt}</CodeBlock> : DASH}
+            </Field>
           )}
         </div>
-        <span className="shrink-0 text-[11px] text-muted-foreground">{ago(wake.firedAt)}</span>
-      </div>
+      )}
     </div>
   );
+}
+
+/**
+ * The row's leading icon reflects the wake's state, not just its kind: an orange spinner
+ * while running, a red alert when failed, an orange alert when stopped. Only a settled
+ * success (or a pre-v7 row with no outcome) keeps the timer/monitor kind icon.
+ */
+function wakeMarker(wake: Wake): { icon: LucideIcon; tone: string } {
+  switch (wake.outcome) {
+    case "running":
+      return { icon: LoaderCircle, tone: "text-orange-400 animate-spin" };
+    case "failed":
+      return { icon: CircleAlert, tone: "text-destructive" };
+    case "stopped":
+      return { icon: CircleAlert, tone: "text-orange-400" };
+    default:
+      return wake.sourceKind === "monitor"
+        ? { icon: Radio, tone: "text-emerald-400" }
+        : { icon: Clock, tone: "text-sky-400" };
+  }
+}
+
+/** Hint labels for a recognized failure category. `other` (unclassified text) is
+ *  deliberately absent — it reads as no hint, the same as a run with no error text. */
+const FAILURE_CATEGORY: Partial<Record<WakeFailureCategory, string>> = {
+  unknown_session: "Session not found",
+  billing: "Billing",
+  rate_limit: "Rate limit",
+  auth: "Authentication",
+  network: "Network",
+};
+
+/** The Outcome row: the state, with the classified failure category as its hint (the
+ *  resume-vs-spawn reason is stored but deliberately not shown). */
+function outcomeRow(wake: Wake): DetailRow {
+  switch (wake.outcome) {
+    case "succeeded":
+      return ["Outcome", "Succeeded", null];
+    case "failed":
+      return [
+        "Outcome",
+        <span key="v" className="text-red-400">
+          Failed
+        </span>,
+        (wake.failureCategory && FAILURE_CATEGORY[wake.failureCategory]) || null,
+      ];
+    case "stopped":
+      return [
+        "Outcome",
+        <span key="v" className="text-orange-300">
+          Stopped
+        </span>,
+        null,
+      ];
+    case "running":
+      return [
+        "Outcome",
+        <span key="v" className="text-orange-300">
+          Running
+        </span>,
+        null,
+      ];
+    default:
+      return ["Outcome", "—", null]; // pre-v7 rows: no outcome was recorded
+  }
 }
 
 /** First non-empty line of a multi-line prompt, for compact one-line row titles. */

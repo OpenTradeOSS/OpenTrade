@@ -1,3 +1,4 @@
+import type { WakeFailureCategory } from "@shared/analytics";
 import { firstLine } from "@shared/notify";
 import type {
   CronCreateInput,
@@ -6,7 +7,7 @@ import type {
   Schedule,
   Wake,
 } from "@shared/schedule";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import type { Db } from "../../db/client";
 import {
@@ -23,16 +24,28 @@ import { buildAgentEnv } from "../terminal/env";
 import { CronTimer } from "./cron-timer";
 import { MonitorRunner } from "./monitor-runner";
 import { systemTimeZone } from "./system-timezone";
-import type { WakeTransport } from "./wake/types";
+import type { PendingWake, WakeResult, WakeTransport } from "./wake/types";
 
 /**
  * Durable autonomy scheduler, owned by the always-on backend host. Arms cron
  * timers and supervises monitor children that survive the GUI closing (unlike
- * Claude Code's session-scoped CronCreate/Monitor). When a trigger fires it
- * records a wake in the Run History feed and hands a wake to the `WakeTransport`, which delivers
- * it either warm (a `claude/channel` inject into the live PTY) or cold (a headless
- * `claude --resume -p` run) — the Scheduler doesn't care which.
+ * Claude Code's session-scoped CronCreate/Monitor). When a trigger fires it hands a
+ * wake to the `WakeTransport`, which delivers it either warm (a `claude/channel` inject
+ * into the live PTY) or cold (a headless `claude --resume -p` run) — the Scheduler
+ * doesn't care which. The coordinator calls back (`wakeStarted` / `wakeFinished`) when
+ * the wake actually runs, and THAT is when the History row is written and settled.
  */
+/** Wake outcome counts over a window, for the feedback diagnostics block (§12.8). */
+export interface WakeStats {
+  total: number;
+  failed: number;
+  stopped: number;
+  /** Failures whose reason is `api_error` (an API-error turn reported by StopFailure). */
+  apiErrors: number;
+  /** The most frequent failure category in the window, or null when nothing failed. */
+  topFailureCategory: WakeFailureCategory | null;
+}
+
 export class Scheduler {
   private cron = new CronTimer();
   private runners = new Map<string, MonitorRunner>();
@@ -53,6 +66,17 @@ export class Scheduler {
       .update(schedulesTable)
       .set({ timezone: bootZone })
       .where(isNull(schedulesTable.timezone))
+      .run();
+    // Any wake still `running` at boot is orphaned: this host is the table's only writer
+    // and nothing in flight survives a restart — a clean quit SIGTERMs headless children
+    // and clears their markers before an exit handler can settle the row, a crash settles
+    // nothing, and a warm wake's `liveWakes` die with the process. Mark them `stopped` so
+    // History doesn't spin forever and `wakeStats` can count them. No `wake_finished`
+    // event: the settle time is unknown.
+    this.db
+      .update(wakesTable)
+      .set({ outcome: "stopped", finishedAt: Date.now() })
+      .where(eq(wakesTable.outcome, "running"))
       .run();
     for (const row of this.db.select().from(schedulesTable).all()) {
       if (!row.enabled) continue;
@@ -319,6 +343,27 @@ export class Scheduler {
       .map(rowToMonitor);
   }
 
+  /** ALL of this agent's crons and monitors, **retired rows included** — for the Monitor
+   *  tab, whose History resolves a fire's trigger after the trigger is gone (the point of
+   *  retire-not-delete). The Active list filters `enabled` itself; the MCP-facing
+   *  `listCron`/`listMonitors` keep hiding retired rows. */
+  listTriggers(agentId: string): { schedules: Schedule[]; monitors: Monitor[] } {
+    return {
+      schedules: this.db
+        .select()
+        .from(schedulesTable)
+        .where(eq(schedulesTable.agentId, agentId))
+        .all()
+        .map(rowToSchedule),
+      monitors: this.db
+        .select()
+        .from(monitorsTable)
+        .where(eq(monitorsTable.agentId, agentId))
+        .all()
+        .map(rowToMonitor),
+    };
+  }
+
   // ---- wake history ----
 
   /** This agent's recorded wakes, newest first, for the Run History pane. */
@@ -434,13 +479,15 @@ export class Scheduler {
   }
 
   /**
-   * Record the fire in the Monitor tab and hand the wake to the coordinator. The
-   * coordinator owns routing (interactive via the channel / headless via `-p`) and
-   * per-agent queueing, so a fire is fire-and-forget here — never blocks the timer/monitor.
+   * Hand the wake to the coordinator. The coordinator owns routing (interactive via the
+   * channel / headless via `-p`) and per-agent queueing, so a fire is fire-and-forget here
+   * — never blocks the timer/monitor. Nothing is recorded yet: the History row is written
+   * when the wake actually starts (`wakeStarted`), so a wake the coordinator later drops
+   * (turn budget spent while queued, agent gone broken) leaves no row.
    * Returns whether the fire actually happened: `false` means the agent is paused (broken /
    * out of turns) and the wake was skipped, so the caller must NOT consume the schedule
    * (advance last-fired, retire a one-shot) — see the callers in `armCron` / `start()`.
-   * `sourceId` is the originating schedule/monitor id, stored on the wake (with `sourceKind`)
+   * `sourceId` is the originating schedule/monitor id, carried on the wake (with `sourceKind`)
    * so history can resolve the timer's details even after it's retired — every caller
    * (`armCron`, `start()` catch-up, `startMonitor`'s trigger) has it in scope.
    */
@@ -457,44 +504,126 @@ export class Scheduler {
     // notification + history row on every cron tick / monitor trigger while nothing runs.
     // Re-checked live each fire, so a reset / toggle / GUI-open resumes with no re-arm.
     if (this.wake.wouldDropWake(agentId)) return false;
-    // How this wake will be delivered: a live interactive session (the channel) takes it
-    // warm; anything else (offline/headless) routes to a background `-p` run. The
-    // coordinator decides this synchronously off the same execution state, so reading it
-    // here — before enqueue — captures the routing the wake will get.
-    const background = this.registry.executionStateOf(agentId) !== "interactive";
-    // The wake row is the Monitor tab's record of this fire; the `scheduler:changed`
-    // emit below re-queries it (and the upcoming schedules) — no separate bus event needed.
+    // The id minted here becomes the History row's id once the coordinator starts the
+    // wake (`wakeStarted`), so a fire is traceable end to end.
+    this.wake.enqueue(agentId, { id: nanoid(), agentId, prompt, sourceKind, sourceId });
+    // Surface the updated last/next-fire times in the Monitor tab live.
+    bus.emitEvent("scheduler:changed", { agentId });
+    return true;
+  }
+
+  // ---- wake outcome recording (SchedulerControl, called back by the coordinator) ----
+
+  /**
+   * The coordinator actually started the wake — a headless child spawned (`background`)
+   * or the live session accepted it. Only now does the fire exist in History: the row is
+   * written `running`, the user is notified, and the agent's "last active" moves.
+   */
+  wakeStarted(wake: PendingWake, background: boolean): void {
+    const agent = this.registry.get(wake.agentId);
+    // Same guard as `fire()`: an agent archived while this wake sat queued gets no row
+    // (the strategy short-circuits its run anyway) and no "now running" notification.
+    if (!agent || agent.archivedAt !== null) return;
     this.db
       .insert(wakesTable)
       .values({
-        id: nanoid(),
-        agentId,
-        sourceKind,
-        sourceId,
-        prompt,
+        id: wake.id,
+        agentId: wake.agentId,
+        sourceKind: wake.sourceKind,
+        sourceId: wake.sourceId,
+        prompt: wake.prompt,
         background,
         firedAt: Date.now(),
+        outcome: "running",
       })
       .run();
     analytics.track("schedule_fired", {
-      source: sourceKind,
+      source: wake.sourceKind,
       path: background ? "headless" : "warm",
     });
     // Stamp `last_turn_at` at wake START, not just at the Stop hook: a run that dies
     // mid-flight (API error — Stop never fires) still moves the tray's "last active".
-    this.registry.markAgentTurn(agentId);
-    this.wake.enqueue(agentId, prompt);
-    // Surface the new wake + updated last/next-fire times in the Monitor tab live.
-    bus.emitEvent("scheduler:changed", { agentId });
+    this.registry.markAgentTurn(wake.agentId);
+    // The new row is the Monitor tab's record of this fire; the emit re-queries it.
+    bus.emitEvent("scheduler:changed", { agentId: wake.agentId });
     // Notify the user their agent just started working (the launcher shows it only
     // while OpenTrade is unfocused — see §12.4).
     bus.emitEvent("notify", {
       kind: "wake",
-      title: `${agent.name} — ${sourceKind === "cron" ? "Scheduled run" : "Monitor fired"}`,
-      body: `${agent.name} is now running: ${firstLine(prompt)}`,
-      agentId,
+      title: `${agent.name} — ${wake.sourceKind === "cron" ? "Scheduled run" : "Monitor fired"}`,
+      body: `${agent.name} is now running: ${firstLine(wake.prompt)}`,
+      agentId: wake.agentId,
     });
-    return true;
+  }
+
+  /** The started wake settled: stamp its outcome (+ failure detail) and finish time, and
+   *  track it — this is the one place that knows the final outcome on either path. */
+  wakeFinished(wake: PendingWake, result: WakeResult): void {
+    const finishedAt = Date.now();
+    // One guarded UPDATE: only a row still `running` settles, so a wake that never
+    // started (agent archived meanwhile) or was already settled is a no-op — exactly-once
+    // holds at the DB layer too, never a double `wake_finished`. RETURNING hands back the
+    // two facts the event needs that `PendingWake` doesn't carry.
+    const row = this.db
+      .update(wakesTable)
+      .set({
+        outcome: result.outcome,
+        finishedAt,
+        failureReason: result.failureReason ?? null,
+        failureCategory: result.failureCategory ?? null,
+      })
+      .where(and(eq(wakesTable.id, wake.id), eq(wakesTable.outcome, "running")))
+      .returning({ background: wakesTable.background, firedAt: wakesTable.firedAt })
+      .get();
+    if (!row) return;
+    analytics.track("wake_finished", {
+      source: wake.sourceKind,
+      path: row.background ? "headless" : "warm",
+      outcome: result.outcome,
+      duration_ms: Math.max(0, finishedAt - row.firedAt),
+      ...(result.failureReason ? { failure_reason: result.failureReason } : {}),
+      ...(result.failureCategory ? { failure_category: result.failureCategory } : {}),
+    });
+    bus.emitEvent("scheduler:changed", { agentId: wake.agentId });
+  }
+
+  /**
+   * Outcome counts across ALL agents for wakes started since `sinceMs` — the feedback
+   * form's "did autonomy work" block (§12.8). Counts and one category, never prompts.
+   */
+  wakeStats(sinceMs: number): WakeStats {
+    const rows = this.db
+      .select({
+        outcome: wakesTable.outcome,
+        failureReason: wakesTable.failureReason,
+        failureCategory: wakesTable.failureCategory,
+      })
+      .from(wakesTable)
+      .where(gte(wakesTable.firedAt, sinceMs))
+      .all();
+    let failed = 0;
+    let stopped = 0;
+    let apiErrors = 0;
+    const byCategory = new Map<string, number>();
+    for (const r of rows) {
+      if (r.outcome === "failed") {
+        failed += 1;
+        if (r.failureReason === "api_error") apiErrors += 1;
+        if (r.failureCategory) {
+          byCategory.set(r.failureCategory, (byCategory.get(r.failureCategory) ?? 0) + 1);
+        }
+      } else if (r.outcome === "stopped") {
+        stopped += 1;
+      }
+    }
+    const top = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    return {
+      total: rows.length,
+      failed,
+      stopped,
+      apiErrors,
+      topFailureCategory: top as WakeFailureCategory | null,
+    };
   }
 
   /**
@@ -565,5 +694,9 @@ function rowToWake(row: typeof wakesTable.$inferSelect): Wake {
     prompt: row.prompt,
     background: row.background,
     firedAt: row.firedAt,
+    outcome: row.outcome as Wake["outcome"],
+    finishedAt: row.finishedAt,
+    failureReason: row.failureReason as Wake["failureReason"],
+    failureCategory: row.failureCategory as Wake["failureCategory"],
   };
 }

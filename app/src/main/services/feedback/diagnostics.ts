@@ -3,12 +3,18 @@ import type { Agent } from "@shared/agent";
 import type { BrokerConnectionStatus } from "@shared/broker";
 import type { FeedbackDiagnostics } from "@shared/feedback";
 import type { AppSettings } from "@shared/settings";
+import type { WakeStats } from "../scheduler";
+
+/** The wake window the diagnostics block summarizes. */
+export const WAKE_STATS_WINDOW_MS = 7 * 86_400_000;
 
 export interface DiagnosticsValues {
   agents: Agent[];
   /** Enabled cron schedules / monitors across every agent. */
   crons: number;
   monitors: number;
+  /** Wake outcomes over the last `WAKE_STATS_WINDOW_MS`, every agent. */
+  wakes: WakeStats;
   brokerStatus: BrokerConnectionStatus;
   brokerAuthorized: boolean;
   /** `fetchedAt` of the cached portfolio snapshot, or null before the first fetch. */
@@ -60,6 +66,12 @@ export function buildDiagnostics(v: DiagnosticsValues, now = Date.now()): Feedba
     agents_active_24h: countIf((a) => a.lastActiveAt !== null && now - a.lastActiveAt < DAY_MS),
     schedules_enabled: v.crons,
     monitors_enabled: v.monitors,
+
+    wakes_7d: v.wakes.total,
+    wakes_failed_7d: v.wakes.failed,
+    wakes_stopped_7d: v.wakes.stopped,
+    wakes_failed_api_7d: v.wakes.apiErrors,
+    wakes_top_failure_7d: v.wakes.topFailureCategory,
 
     broker_status: v.brokerStatus,
     broker_authorized: v.brokerAuthorized,

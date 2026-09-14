@@ -126,7 +126,17 @@ export const wakes = sqliteTable(
     prompt: text("prompt").notNull(),
     /** True if delivered headlessly (no live interactive session); false if warm via the channel. */
     background: integer("background", { mode: "boolean" }).notNull(),
+    /** When the run/turn actually started — a row exists only for a wake that did. */
     firedAt: integer("fired_at").notNull(),
+    /** `WakeOutcome`: "running" | "succeeded" | "failed" | "stopped". Nullable: rows
+     *  written before v7 read NULL. */
+    outcome: text("outcome"),
+    /** When `outcome` settled; NULL while running (and on pre-v7 rows). */
+    finishedAt: integer("finished_at"),
+    /** `WakeFailureReason` (see `@shared/schedule`), set only on a failed run. */
+    failureReason: text("failure_reason"),
+    /** `WakeFailureCategory` classified from the failure text, when recognized. */
+    failureCategory: text("failure_category"),
   },
   (t) => [index("wakes_agent_fired").on(t.agentId, t.firedAt)],
 );

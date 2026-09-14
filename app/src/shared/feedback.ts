@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ApprovalMode } from "./agent";
+import { WakeFailureCategory } from "./analytics";
 import { BrokerConnectionStatus } from "./broker";
 
 /**
@@ -66,6 +67,16 @@ export const FeedbackDiagnostics = z.strictObject({
   agents_active_24h: count,
   schedules_enabled: count,
   monitors_enabled: count,
+
+  // wakes (§12.2) — the last 7 days, counts + one category, never prompts
+  /** Wakes that actually started (a History row exists) in the window. */
+  wakes_7d: count,
+  wakes_failed_7d: count,
+  wakes_stopped_7d: count,
+  /** Failed wakes whose turn ended in an API error (Claude Code's StopFailure). */
+  wakes_failed_api_7d: count,
+  /** The most frequent failure category in the window; null when nothing failed. */
+  wakes_top_failure_7d: WakeFailureCategory.nullable(),
 
   // broker — status only
   broker_status: BrokerConnectionStatus,

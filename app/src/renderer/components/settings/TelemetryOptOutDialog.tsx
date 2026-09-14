@@ -22,7 +22,7 @@ export const OPENTRADE_DISCORD_URL = "https://discord.gg/F63YFPRtq";
  *     `notification_clicked`, `broker_connected|broker_connect_failed`, `feedback_sent`
  *     (usage only — the feedback message itself is not telemetry, §12.8).
  *  2. agents — `agent_created|archived|restarted`, `terminal_session_started|respawned`,
- *     `schedule_created|fired`, `headless_run_finished`, `agent_marked_broken`,
+ *     `schedule_created|fired`, `wake_finished`, `agent_marked_broken`,
  *     `turn_limit_reached`, and the categorical `order_gate_prompted|decided` +
  *     `order_submit_resolved`.
  *  3. errors — `app_error`.

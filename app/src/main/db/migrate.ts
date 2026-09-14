@@ -34,7 +34,7 @@ export interface MigrationDb {
 }
 
 /** Bump on every schema change, with a matching entry in MIGRATIONS. */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 const MIGRATIONS: Record<number, (db: MigrationDb) => void> = {
   // v2 — headless turn limit: per-agent unattended-turn counter + on/off toggle.
@@ -62,6 +62,14 @@ const MIGRATIONS: Record<number, (db: MigrationDb) => void> = {
   // pre-v6 rows read NULL until the scheduler backfills them on its next boot.
   6: (db) => {
     addColumnIfMissing(db, "schedules", "timezone", "TEXT");
+  },
+  // v7 — per-wake outcome for the Monitor tab's History (§12.2): how the run ended,
+  // when, and why it failed. All nullable: pre-v7 rows read NULL (no outcome known).
+  7: (db) => {
+    addColumnIfMissing(db, "wakes", "outcome", "TEXT");
+    addColumnIfMissing(db, "wakes", "finished_at", "INTEGER");
+    addColumnIfMissing(db, "wakes", "failure_reason", "TEXT");
+    addColumnIfMissing(db, "wakes", "failure_category", "TEXT");
   },
 };
 

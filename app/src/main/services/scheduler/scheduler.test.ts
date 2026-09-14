@@ -10,7 +10,7 @@ import type { AgentRegistry } from "../agents/registry";
 import { bus } from "../event-bus";
 import type { LocalApiServer } from "../local-api";
 import { Scheduler } from "./index";
-import type { WakeTransport } from "./wake/types";
+import type { PendingWake, WakeTransport } from "./wake/types";
 
 function memDb(): Db {
   const sqlite = new Database(":memory:");
@@ -27,7 +27,8 @@ function memDb(): Db {
     CREATE TABLE wakes (
       id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_kind TEXT NOT NULL,
       source_id TEXT, prompt TEXT NOT NULL, background INTEGER NOT NULL,
-      fired_at INTEGER NOT NULL);
+      fired_at INTEGER NOT NULL, outcome TEXT, finished_at INTEGER,
+      failure_reason TEXT, failure_category TEXT);
   `);
   return drizzle(sqlite, { schema }) as unknown as Db;
 }
@@ -47,11 +48,20 @@ const AGENT: Agent = {
   archivedAt: null,
 };
 
-/** Standard test stubs: a no-op wake transport (fires never dropped), a registry that
- *  only knows AGENT, and a dummy localApi. */
+/** Standard test stubs: a wake transport that "starts" every wake immediately as a
+ *  background run (so a fire lands in the wakes table synchronously, the way the
+ *  coordinator's `wakeStarted` callback does in prod), a registry that only knows AGENT,
+ *  and a dummy localApi. `bind` wires the transport to the scheduler once built. */
 function stdDeps() {
+  let scheduler: Scheduler | undefined;
+  const wakes: PendingWake[] = []; // every wake handed to the transport, in order
   const wake: WakeTransport = {
-    enqueue: () => {},
+    enqueue: (_agentId, w) => {
+      wakes.push(w);
+      scheduler?.wakeStarted(w, true);
+    },
+    onTurnEnded: () => {},
+    onTurnFailed: () => {},
     awaitPoll: async () => null,
     onInteractiveUp: () => {},
     onInteractiveDown: () => {},
@@ -66,14 +76,23 @@ function stdDeps() {
     markAgentTurn: () => {},
   } as unknown as AgentRegistry;
   const localApi = { port: 12345, token: "tok" } as unknown as LocalApiServer;
-  return { wake, registry, localApi };
+  const bind = (s: Scheduler) => {
+    scheduler = s;
+    return s;
+  };
+  return { wake, wakes, registry, localApi, bind };
 }
 
 /** Build a Scheduler over a caller-supplied db so the test can inspect raw rows
  *  (e.g. assert a retired row survives). */
 function makeSchedulerOn(db: Db): Scheduler {
-  const { wake, registry, localApi } = stdDeps();
-  return new Scheduler(db, wake, registry, localApi);
+  return makeSchedulerWithWakes(db).s;
+}
+
+/** As `makeSchedulerOn`, also exposing the wakes the transport received. */
+function makeSchedulerWithWakes(db: Db): { s: Scheduler; wakes: PendingWake[] } {
+  const { wake, wakes, registry, localApi, bind } = stdDeps();
+  return { s: bind(new Scheduler(db, wake, registry, localApi)), wakes };
 }
 
 function makeScheduler() {
@@ -185,6 +204,8 @@ describe("Scheduler CRUD", () => {
       .run();
     const wake: WakeTransport = {
       enqueue: () => {},
+      onTurnEnded: () => {},
+      onTurnFailed: () => {},
       awaitPoll: async () => null,
       onInteractiveUp: () => {},
       onInteractiveDown: () => {},
@@ -230,6 +251,8 @@ describe("Scheduler CRUD", () => {
         enqueue: () => {
           enqueued += 1;
         },
+        onTurnEnded: () => {},
+        onTurnFailed: () => {},
         awaitPoll: async () => null,
         onInteractiveUp: () => {},
         onInteractiveDown: () => {},
@@ -299,6 +322,8 @@ describe("Scheduler CRUD", () => {
       enqueue: () => {
         enqueued += 1;
       },
+      onTurnEnded: () => {},
+      onTurnFailed: () => {},
       awaitPoll: async () => null,
       onInteractiveUp: () => {},
       onInteractiveDown: () => {},
@@ -380,6 +405,155 @@ describe("Scheduler CRUD", () => {
     expect(wakes).toHaveLength(1);
     expect(wakes[0].sourceKind).toBe("cron");
     expect(wakes[0].sourceId).toBe("cron1"); // links wake → (now retired) schedule
+  });
+
+  test("wakeStarted writes the row `running`; wakeFinished settles it once with the failure detail", () => {
+    const db = memDb();
+    db.insert(schema.schedules)
+      .values({
+        id: "cron1",
+        agentId: "agent1",
+        cronExpr: "0 9 * * *",
+        prompt: "p",
+        recurring: false,
+        enabled: true,
+        nextFireAt: 1, // past → start() catch-up fires it
+        lastFiredAt: null,
+        createdAt: 1,
+      })
+      .run();
+    const { s, wakes: handed } = makeSchedulerWithWakes(db);
+    scheduler = s;
+    scheduler.start();
+
+    expect(handed).toHaveLength(1);
+    let row = db.select().from(schema.wakes).get()!;
+    expect(row.id).toBe(handed[0].id); // the fire-time id IS the History row's id
+    expect(row.outcome).toBe("running");
+    expect(row.finishedAt).toBeNull();
+
+    scheduler.wakeFinished(handed[0], {
+      outcome: "failed",
+      failureReason: "resume_fail",
+      failureCategory: "billing",
+    });
+    row = db.select().from(schema.wakes).get()!;
+    expect(row.outcome).toBe("failed");
+    expect(row.failureReason).toBe("resume_fail");
+    expect(row.failureCategory).toBe("billing");
+    expect(row.finishedAt).not.toBeNull();
+    expect(db.select().from(schema.wakes).all()).toHaveLength(1); // updated, not re-inserted
+
+    // Settling is exactly-once at the DB layer: a second settle for the same wake is a no-op.
+    scheduler.wakeFinished(handed[0], { outcome: "succeeded" });
+    row = db.select().from(schema.wakes).get()!;
+    expect(row.outcome).toBe("failed");
+    expect(row.failureCategory).toBe("billing");
+  });
+
+  test("start() marks wakes left `running` by the previous host as stopped", () => {
+    const db = memDb();
+    const base = {
+      agentId: "agent1",
+      sourceKind: "cron",
+      sourceId: null,
+      prompt: "p",
+      background: true,
+      firedAt: 1000,
+      finishedAt: null,
+      failureReason: null,
+      failureCategory: null,
+    } as const;
+    db.insert(schema.wakes)
+      .values({ ...base, id: "orphan", outcome: "running" })
+      .run();
+    db.insert(schema.wakes)
+      .values({ ...base, id: "done", outcome: "succeeded", finishedAt: 2000 })
+      .run();
+    scheduler = makeSchedulerOn(db);
+    scheduler.start();
+
+    const rows = Object.fromEntries(
+      db
+        .select()
+        .from(schema.wakes)
+        .all()
+        .map((r) => [r.id, r]),
+    );
+    expect(rows.orphan.outcome).toBe("stopped");
+    expect(rows.orphan.finishedAt).not.toBeNull();
+    expect(rows.done.outcome).toBe("succeeded"); // settled rows are untouched
+    expect(rows.done.finishedAt).toBe(2000);
+  });
+
+  test("wakeStats counts outcomes in the window across agents, with the top failure category", () => {
+    const db = memDb();
+    scheduler = makeSchedulerOn(db);
+    const now = Date.now();
+    const row = (id: string, agentId: string, firedAt: number, extra: Record<string, unknown>) =>
+      db
+        .insert(schema.wakes)
+        .values({
+          id,
+          agentId,
+          sourceKind: "cron",
+          sourceId: null,
+          prompt: "p",
+          background: true,
+          firedAt,
+          outcome: null,
+          finishedAt: null,
+          failureReason: null,
+          failureCategory: null,
+          ...extra,
+        })
+        .run();
+    row("w1", "agent1", now - 1000, { outcome: "succeeded" });
+    row("w2", "agent1", now - 2000, {
+      outcome: "failed",
+      failureReason: "resume_fail",
+      failureCategory: "billing",
+    });
+    row("w3", "agent2", now - 3000, {
+      outcome: "failed",
+      failureReason: "api_error",
+      failureCategory: "billing",
+    });
+    row("w4", "agent2", now - 4000, {
+      outcome: "failed",
+      failureReason: "api_error",
+      failureCategory: "network",
+    });
+    row("w5", "agent1", now - 5000, { outcome: "stopped" });
+    row("w6", "agent1", now - 6000, { outcome: "running" });
+    row("old", "agent1", now - 10 * 86_400_000, { outcome: "failed", failureCategory: "auth" }); // outside
+
+    expect(scheduler.wakeStats(now - 7 * 86_400_000)).toEqual({
+      total: 6,
+      failed: 3,
+      stopped: 1,
+      apiErrors: 2,
+      topFailureCategory: "billing",
+    });
+    expect(scheduler.wakeStats(now).topFailureCategory).toBeNull(); // empty window
+  });
+
+  test("listTriggers returns the agent's retired crons/monitors too (History resolves them)", () => {
+    scheduler = makeScheduler();
+    const cron = scheduler.createCron("agent1", {
+      cron: "30 9 * * 1-5",
+      prompt: "p",
+      recurring: true,
+    });
+    const mon = scheduler.createMonitor("agent1", { command: "sleep 5" });
+    scheduler.deleteCron("agent1", cron.id);
+    scheduler.stopMonitor("agent1", mon.id);
+
+    expect(scheduler.listCron("agent1")).toEqual([]); // MCP-facing lists hide retired rows
+    expect(scheduler.listMonitors("agent1")).toEqual([]);
+    const all = scheduler.listTriggers("agent1");
+    expect(all.schedules.map((s) => [s.id, s.enabled])).toEqual([[cron.id, false]]);
+    expect(all.monitors.map((m) => [m.id, m.enabled])).toEqual([[mon.id, false]]);
   });
 
   test("a fired monitor wake records source_id + source_kind linking back to its monitor", async () => {
