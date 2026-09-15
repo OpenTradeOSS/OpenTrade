@@ -23,6 +23,7 @@
 // also makes silent check failures — e.g. a release published with no
 // `latest-mac.yml` asset — visible instead of dying in a console log nobody reads.
 
+import type { UpdateChannel } from "@shared/settings";
 import { UPDATER_IPC, type UpdaterState } from "@shared/updater";
 import { app, BrowserWindow, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
@@ -190,6 +191,38 @@ export function installNow(): void {
 }
 
 /**
+ * Apply the `updateChannel` setting, pushed by the launcher from `settings.onChanged` —
+ * so it arrives once the host is up and again on every settings change. Maps onto
+ * electron-updater's `allowPrerelease`: on, the GitHub provider walks the releases feed
+ * and takes the newest beta-or-stable tag; off, it resolves GitHub's `/releases/latest`,
+ * which excludes pre-releases. Turning beta off on a beta build therefore finds only the
+ * older stable release, which the updater refuses as a downgrade — the install stays put
+ * until the next stable ships (§14).
+ *
+ * The first push also runs the deferred boot check and starts the 4h timer, so the boot
+ * check always runs with the channel the user actually chose (the push lands within the
+ * first second of a launch). Later pushes re-check only when the channel really flipped;
+ * the Settings switch is disabled while a check is in flight, so a flip never races one.
+ */
+export function setUpdateChannel(setting: UpdateChannel): void {
+  if (!app.isPackaged) return;
+  // Idempotent; makes this safe to call before `initAutoUpdate` (the host-failed boot
+  // path does), so a check never runs with electron-updater's auto-download defaults.
+  wireEvents();
+  const allow = setting === "beta";
+  if (!booted) {
+    booted = true;
+    autoUpdater.allowPrerelease = allow;
+    checkForUpdatesNow();
+    setInterval(() => checkForUpdatesNow(), CHECK_INTERVAL_MS);
+    return;
+  }
+  if (autoUpdater.allowPrerelease === allow) return;
+  autoUpdater.allowPrerelease = allow;
+  checkForUpdatesNow();
+}
+
+/**
  * Wire the updater: register the renderer IPC bridge (always, so the button works
  * and can report `unsupported` in dev) and, in a packaged build, run the boot check
  * plus the recurring 4h timer.
@@ -213,11 +246,5 @@ export function initAutoUpdate(_win: BrowserWindow, h: UpdaterHooks = {}): void 
   }
 
   wireEvents();
-
-  // Boot check + recurring timer once per process, even if init runs again (e.g. a
-  // window recreation), so we never stack duplicate intervals.
-  if (booted) return;
-  booted = true;
-  checkForUpdatesNow();
-  setInterval(() => checkForUpdatesNow(), CHECK_INTERVAL_MS);
+  // No boot check here: `setUpdateChannel()` runs it once the channel is known.
 }

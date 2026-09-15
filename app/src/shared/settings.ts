@@ -2,6 +2,17 @@ import { z } from "zod";
 import { ApprovalMode } from "./agent";
 
 /**
+ * Which release channel the app updater follows (§14). Installing a beta build turns
+ * this to `beta` — the host flips it when the running version becomes a prerelease —
+ * and it stays there, through the graduation to the stable release, until the user
+ * turns it off in Settings → About. Turning beta off *on a beta build* does not
+ * downgrade (the updater refuses downgrades, and an older build may refuse a newer DB
+ * schema); the install stays on its current beta until the next stable ships.
+ */
+export const UpdateChannel = z.enum(["stable", "beta"]);
+export type UpdateChannel = z.infer<typeof UpdateChannel>;
+
+/**
  * Global app settings (the `settings` kv table, distinct from per-agent config
  * and from the encrypted OAuth/token rows). This is the single source of truth
  * for every tunable: bounds live here, defaults live in `DEFAULT_SETTINGS`, and
@@ -60,6 +71,11 @@ export const AppSettings = z.object({
    *  there when the window is closed / ⌘Q'd, so agent status + notifications keep
    *  flowing while the app is "closed". On by default; off restores plain quit. */
   showInMenuBar: z.boolean(),
+
+  // ---- app updates (§14) ----
+  /** Release channel the updater follows; see `UpdateChannel`. Default `stable`; a beta
+   *  install sets it to `beta` (host boot). */
+  updateChannel: UpdateChannel,
 });
 export type AppSettings = z.infer<typeof AppSettings>;
 
@@ -81,6 +97,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notifyUpdates: true,
   notifyMutedAgents: [],
   showInMenuBar: true,
+  updateChannel: "stable",
 };
 
 /** A partial update of the editable settings. */

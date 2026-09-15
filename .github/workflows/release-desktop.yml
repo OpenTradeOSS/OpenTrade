@@ -1,7 +1,19 @@
 name: Release desktop (macOS)
 
 # Builds and publishes the macOS DMG + update artifacts to a GitHub Release.
-# - Tag push (`v*.*.*`) → full Developer ID signed + notarized release.
+# - Stable tag push (`vX.Y.Z`) → full Developer ID signed + notarized release, uploaded
+#   into a DRAFT that the maintainer publishes by hand. `app/package.json` must already
+#   carry that exact version (asserted below).
+# - Beta tag push (`vX.Y.Z-beta.N` — only the `beta` identifier is accepted; it is the
+#   one electron-updater treats as a channel that graduates to stable) → the same signed
+#   build, but the version is taken FROM THE TAG (`-c.extraMetadata.version`) so a beta
+#   can be cut from any commit without a version-bump commit, and the release is flagged
+#   as a GitHub PRE-RELEASE and published automatically. The pre-release flag is what
+#   keeps a beta off `/releases/latest`: stable installs resolve that endpoint for
+#   updates, and electron-builder does not set the flag from the version string on its
+#   own. Installs opt into betas via the "Receive beta updates" setting (installing a beta
+#   build turns it on), and a beta install moves to the matching stable release when it
+#   ships.
 # - Manual run (workflow_dispatch) → optionally `adhoc` mode, which ad-hoc signs
 #   and SKIPS notarization (useful when Apple's notary service is backed up).
 #
@@ -46,6 +58,44 @@ jobs:
       - name: Rebuild native modules for the Electron ABI
         run: bun run --cwd app rebuild
 
+      # Stable vs beta is decided by the tag alone: `v0.2.8` is stable, anything with a
+      # `-suffix` (`v0.2.8-beta.1`) is a prerelease. Everything below keys off these
+      # outputs. On a manual (non-tag) run both are empty and every gated step is skipped.
+      - name: Classify tag
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Strict semver numerics (no leading zeros): electron-updater's semver parser
+          # rejects e.g. `beta.01`, and a build it can't parse can't be updated from.
+          n='(0|[1-9][0-9]*)'
+          if [[ ! "$version" =~ ^$n\.$n\.$n(-beta\.$n)?$ ]]; then
+            echo "::error::Tag $TAG is not vX.Y.Z or vX.Y.Z-beta.N (only the beta prerelease identifier is supported)"; exit 1
+          fi
+          if [[ "$version" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
+          echo "Tag $TAG → version $version (prerelease=$prerelease)"
+
+      # A stable tag must match the committed version: the build takes its version from
+      # app/package.json, so a mismatch would publish a release whose binaries report a
+      # different version than the tag they were built from (and electron-builder would
+      # look for / create a release under the package.json version, not this tag).
+      - name: Assert app/package.json version matches the stable tag
+        if: steps.tag.outputs.prerelease == 'false'
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          pkg=$(jq -r '.version' app/package.json)
+          if [ "$pkg" != "$VERSION" ]; then
+            echo "::error::app/package.json is $pkg but the tag is v$VERSION — bump the version (or fix the tag) before releasing."
+            exit 1
+          fi
+
       # electron-builder uploads assets into a DRAFT release. If a *published*
       # (non-draft) release for this tag already exists — e.g. the tag was created
       # via GitHub's "Publish release" UI or `gh release create` instead of a plain
@@ -54,7 +104,8 @@ jobs:
       # shows up as "Latest" with no binaries and auto-update 404s for all users.
       #
       # This preflight converts such a release back to a draft so the upload below
-      # succeeds; the maintainer re-publishes after CI. To avoid UN-publishing a
+      # succeeds; the maintainer re-publishes a stable draft after CI (a beta is published
+      # by the last step). To avoid UN-publishing a
       # healthy live release on an accidental re-run, it acts ONLY when the release is
       # both published AND missing its `latest-mac.yml` feed (i.e. actually broken).
       # A published release that already has the feed is left alone and the step fails
@@ -99,9 +150,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Baked into host.js by electron-vite; absent → analytics no-op.
           MAIN_VITE_POSTHOG_API_KEY: ${{ secrets.MAIN_VITE_POSTHOG_API_KEY }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+          VERSION: ${{ steps.tag.outputs.version }}
         # `package` runs the prepackage native-module materialization + electron-vite
         # build + electron-builder. `--publish always` uploads the DMG, the zip, and
-        # latest-mac.yml (the electron-updater feed) to the GitHub Release.
+        # latest-mac.yml (the electron-updater feed) to the GitHub Release. Arguments
+        # after `--` are appended to the script's final command (electron-builder).
         run: |
           # Ad-hoc when explicitly requested OR when no signing cert is configured
           # (so a tag push still produces a usable release before signing secrets
@@ -111,7 +165,17 @@ jobs:
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
           fi
-          bun run --cwd app package -- --publish always
+          # Beta: the version comes from the tag, not app/package.json. extraMetadata is
+          # merged into the packaged package.json, so app.getVersion() (host manifest,
+          # updater currentVersion, telemetry app_version), the DMG title and the zip name
+          # all carry e.g. 0.2.8-beta.1, and electron-builder targets the v0.2.8-beta.1
+          # release. main keeps the last stable version; only stable releases bump it.
+          extra=()
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "Beta build — versioning from the tag: $VERSION"
+            extra+=("-c.extraMetadata.version=$VERSION")
+          fi
+          bun run --cwd app package -- --publish always "${extra[@]}"
 
       # Publish the renderer + daemon sourcemaps as a GitHub Release asset so any
       # released version's sanitized `app_error` stack frames (bundle.js:line — see
@@ -124,7 +188,8 @@ jobs:
       # and excluded from the app bundle (electron-builder.yml `!out/**/*.map`), so they
       # reach users only as this explicit, durable release asset — never inside the app.
       # Tag pushes only: electron-builder created the draft release in the step above
-      # (the maintainer re-publishes it after CI), and `gh release upload` attaches to it.
+      # (published later — by the maintainer for stable, by the last step for a beta), and
+      # `gh release upload` attaches to it.
       - name: Publish sourcemaps to the GitHub Release (for error triage)
         if: ${{ startsWith(github.ref, 'refs/tags/') && !cancelled() }}
         env:
@@ -138,3 +203,39 @@ jobs:
           # Preserve the out/ layout in the zip so renderer vs daemon maps stay distinct.
           find app/out -name '*.js.map' -print0 | xargs -0 zip -q "sourcemaps-$TAG.zip"
           gh release upload "$TAG" "sourcemaps-$TAG.zip" --clobber
+
+      # Beta tags: flag the release as a GitHub PRE-RELEASE and publish it. The flag is
+      # the load-bearing safety step — GitHub excludes pre-releases from
+      # `/releases/latest`, which is exactly what every stable install's updater (and the
+      # website's `/releases/latest/download/…dmg` permalink) resolves. electron-builder
+      # never sets it from the version string, so an unflagged beta would be pushed to all
+      # users as the newest release. Auto-publishing is fine here: a beta's audience is
+      # the maintainer, and the manual publish checkpoint stays in place for stable. Runs
+      # last so the published pre-release already carries its sourcemaps.
+      # Stable tags: the mirror-image guard — a stable release accidentally flagged
+      # pre-release would be invisible to `/releases/latest` and nobody would update.
+      - name: Apply the release channel (beta → pre-release + publish; stable → assert not pre-release)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # electron-builder must have created the release (and uploaded the feed) by now.
+          meta=$(gh release view "$TAG" --json isPrerelease,isDraft,assets)
+          has_feed=$(jq -r '[.assets[].name] | any(. == "latest-mac.yml")' <<<"$meta")
+          if [ "$has_feed" != "true" ]; then
+            echo "::error::Release $TAG has no latest-mac.yml — electron-builder skipped the upload (see the build log). Not touching the release."
+            exit 1
+          fi
+          if [ "$PRERELEASE" = "true" ]; then
+            gh release edit "$TAG" --prerelease --draft=false
+            echo "Release $TAG published as a pre-release (beta channel)."
+          else
+            if [ "$(jq -r '.isPrerelease' <<<"$meta")" = "true" ]; then
+              echo "::error::Stable release $TAG is flagged as a pre-release — stable installs would never see it. Clear the flag before publishing."
+              exit 1
+            fi
+            echo "Release $TAG is a stable draft — publish it on GitHub when ready."
+          fi

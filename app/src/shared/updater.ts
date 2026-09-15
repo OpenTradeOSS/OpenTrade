@@ -37,6 +37,13 @@ export interface UpdaterState {
   checkedAt?: number;
 }
 
+/** Whether a version string carries a semver prerelease component (`0.2.8-beta.1`).
+ *  The host uses it to enroll a freshly installed beta build in the beta channel; the
+ *  Settings switch uses it to explain what "off" means on a beta build. */
+export function isPrereleaseVersion(version: string): boolean {
+  return /^\d+\.\d+\.\d+-/.test(version);
+}
+
 /** IPC channel names — kept here so main, preload, and renderer can't drift. */
 export const UPDATER_IPC = {
   /** invoke → force a check now; resolves to the resulting UpdaterState. */

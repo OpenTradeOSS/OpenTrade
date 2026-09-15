@@ -4,6 +4,7 @@ import { errorCodeOf, errorNameOf, sanitizeStack } from "@shared/analytics";
 import type { HostNotification, NotificationKind, RecentNotification } from "@shared/notify";
 import { type AppSettings, DEFAULT_SETTINGS } from "@shared/settings";
 import { SHELL_IPC } from "@shared/shell";
+import { isPrereleaseVersion } from "@shared/updater";
 import { createTRPCClient, createWSClient, wsLink } from "@trpc/client";
 import { app, BrowserWindow, ipcMain, Notification, powerMonitor } from "electron";
 import superjson from "superjson";
@@ -18,7 +19,7 @@ import {
 } from "./host/manifest";
 import { AppTray } from "./tray";
 import type { AppRouter } from "./trpc/routers";
-import { initAutoUpdate } from "./updater";
+import { initAutoUpdate, setUpdateChannel } from "./updater";
 import { createMainWindow } from "./window";
 
 let mainWindow: BrowserWindow | null = null;
@@ -250,6 +251,10 @@ async function main() {
   const win = openWindow(host);
 
   if (host.trpcPort) wireNotifications(host);
+  // No host → no settings push → the updater's deferred boot check (§14) would never
+  // run. Start it with the build's own default channel so a broken build can still be
+  // offered the release that fixes it.
+  else setUpdateChannel(isPrereleaseVersion(app.getVersion()) ? "beta" : "stable");
   // The menu bar item first appears from the initial `settings.onChanged` push (sub-
   // second; emit-on-subscribe), NOT eagerly here: seeding from the default-on setting
   // flashed the tray for users who disabled it — and while that flash lasted, ⌘Q
@@ -405,6 +410,8 @@ function wireNotifications(host: HostManifest) {
     onData: (s: AppSettings) => {
       liveSettings = s;
       applyMenuBar();
+      // The updater lives in main (needs Electron's `app`), the setting in the host.
+      setUpdateChannel(s.updateChannel);
     },
   });
 
