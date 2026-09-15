@@ -214,7 +214,10 @@ jobs:
       # last so the published pre-release already carries its sourcemaps.
       # Stable tags: the mirror-image guard — a stable release accidentally flagged
       # pre-release would be invisible to `/releases/latest` and nobody would update.
-      - name: Apply the release channel (beta → pre-release + publish; stable → assert not pre-release)
+      # Both: the release title is set to the tag (`v0.2.8`, `v0.2.8-beta.1`). electron-builder
+      # names the release after the bare version (`0.2.8`), so without this the list mixes
+      # `0.2.7` with hand-renamed `v0.2.6`.
+      - name: Apply the release channel (title = tag; beta → pre-release + publish; stable → assert not pre-release)
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -229,6 +232,7 @@ jobs:
             echo "::error::Release $TAG has no latest-mac.yml — electron-builder skipped the upload (see the build log). Not touching the release."
             exit 1
           fi
+          gh release edit "$TAG" --title "$TAG"
           if [ "$PRERELEASE" = "true" ]; then
             gh release edit "$TAG" --prerelease --draft=false
             echo "Release $TAG published as a pre-release (beta channel)."
