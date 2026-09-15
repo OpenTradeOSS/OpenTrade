@@ -1,3 +1,4 @@
+import { isPrereleaseVersion } from "@shared/updater";
 import {
   Bell,
   Bot,
@@ -541,6 +542,7 @@ function AboutPanel() {
         </span>
       </SettingsRow>
       <SoftwareUpdateRow />
+      <BetaUpdatesRow />
       <SettingsRow label="Platform">
         <span className="text-sm text-muted-foreground">{info.data?.platform ?? "—"}</span>
       </SettingsRow>
@@ -661,6 +663,49 @@ function SoftwareUpdateRow() {
           </Button>
         )}
       </div>
+    </SettingsRow>
+  );
+}
+
+/**
+ * The `updateChannel` setting (§14) as a single switch. Installing a beta build turns it
+ * on (the host does that); it stays on until the user turns it off here. The hint spells
+ * out the one non-obvious case: turning beta off on a beta build doesn't downgrade — the
+ * install stays on its beta until the next stable release, which the updater then offers.
+ * Disabled while a check or download is in flight: a check runs with the channel it
+ * started with, so the channel must not change underneath it.
+ */
+function BetaUpdatesRow() {
+  const settings = useSettings();
+  const update = useUpdateSettings();
+  const { state } = useUpdater();
+  const s = settings.data;
+  if (!s) return null;
+
+  const version = state?.currentVersion ?? "";
+  const onBetaBuild = isPrereleaseVersion(version);
+  const receivingBetas = s.updateChannel === "beta";
+  const status = state?.status ?? "idle";
+  const busy = status === "checking" || status === "downloading" || status === "downloaded";
+
+  let hint: string;
+  if (receivingBetas) {
+    hint = onBetaBuild
+      ? "You're on a beta build. You'll get the next betas and the stable release that follows."
+      : "Get early builds before they reach everyone. They may have rough edges.";
+  } else {
+    hint = onBetaBuild
+      ? `Staying on ${version}. You'll move to the stable channel with the next stable release.`
+      : "Only stable releases.";
+  }
+
+  return (
+    <SettingsRow label="Receive beta updates" hint={hint}>
+      <SettingToggle
+        checked={receivingBetas}
+        disabled={busy}
+        onChange={(on) => update.mutate({ updateChannel: on ? "beta" : "stable" })}
+      />
     </SettingsRow>
   );
 }

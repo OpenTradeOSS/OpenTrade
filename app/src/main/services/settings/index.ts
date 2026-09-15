@@ -1,5 +1,10 @@
 import { ApprovalMode } from "@shared/agent";
-import { type AppSettings, DEFAULT_SETTINGS, SettingsUpdate } from "@shared/settings";
+import {
+  type AppSettings,
+  DEFAULT_SETTINGS,
+  SettingsUpdate,
+  UpdateChannel,
+} from "@shared/settings";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { settings as settingsTable } from "../../db/schema";
@@ -25,6 +30,7 @@ const KEYS: Record<keyof AppSettings, string> = {
   notifyUpdates: "notify_updates",
   notifyMutedAgents: "notify_muted_agents",
   showInMenuBar: "show_in_menu_bar",
+  updateChannel: "update_channel",
 };
 
 /**
@@ -82,6 +88,7 @@ export class SettingsService {
         DEFAULT_SETTINGS.notifyMutedAgents,
       ),
       showInMenuBar: this.readBool(KEYS.showInMenuBar, DEFAULT_SETTINGS.showInMenuBar),
+      updateChannel: this.readUpdateChannel(KEYS.updateChannel, DEFAULT_SETTINGS.updateChannel),
     };
   }
 
@@ -154,6 +161,11 @@ export class SettingsService {
 
   private readApprovalMode(key: string, fallback: AppSettings["defaultApprovalMode"]) {
     const parsed = ApprovalMode.safeParse(this.readRaw(key));
+    return parsed.success ? parsed.data : fallback;
+  }
+
+  private readUpdateChannel(key: string, fallback: AppSettings["updateChannel"]) {
+    const parsed = UpdateChannel.safeParse(this.readRaw(key));
     return parsed.success ? parsed.data : fallback;
   }
 

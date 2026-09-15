@@ -60,6 +60,7 @@ const REPORTABLE_SETTING_KEYS = [
   "notifyRestricted",
   "notifyUpdates",
   "showInMenuBar",
+  "updateChannel",
 ] as const;
 // `notifyMutedAgents` is intentionally excluded — it carries agent ids, not a
 // categorical/boolean value, so it isn't in the `settingKey` telemetry enum.
@@ -310,10 +311,13 @@ export class AnalyticsService {
     for (const key of REPORTABLE_SETTING_KEYS) {
       if (prev[key] === next[key]) continue;
       const value = next[key];
-      if (typeof value === "boolean" || key === "defaultApprovalMode") {
+      if (typeof value === "boolean" || key === "defaultApprovalMode" || key === "updateChannel") {
         this.track("setting_changed", {
           key,
-          value: value as boolean | AppSettings["defaultApprovalMode"],
+          value: value as
+            | boolean
+            | AppSettings["defaultApprovalMode"]
+            | AppSettings["updateChannel"],
         });
       } else {
         this.track("setting_changed", { key });

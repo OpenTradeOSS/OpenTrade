@@ -61,6 +61,19 @@ describe("SettingsService", () => {
     expect(s.get().showInMenuBar).toBe(false);
   });
 
+  test("updateChannel defaults to stable, round-trips, and rejects unknown channels", () => {
+    const s = new SettingsService(memDb());
+    expect(s.get().updateChannel).toBe("stable");
+    expect(s.update({ updateChannel: "beta" }).updateChannel).toBe("beta");
+    expect(s.get().updateChannel).toBe("beta");
+    expect(s.update({ updateChannel: "stable" }).updateChannel).toBe("stable");
+    // biome-ignore lint/suspicious/noExplicitAny: deliberately invalid input
+    expect(() => s.update({ updateChannel: "canary" as any })).toThrow();
+    // A garbage stored value falls back to the default rather than poisoning get().
+    s.setRaw("update_channel", "nightly");
+    expect(s.get().updateChannel).toBe("stable");
+  });
+
   test("ms convenience getters convert seconds", () => {
     const s = new SettingsService(memDb());
     s.update({ pollIntervalFocusedSec: 7, pollIntervalBlurredSec: 12 });

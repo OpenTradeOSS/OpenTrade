@@ -12,6 +12,7 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { isPrereleaseVersion } from "@shared/updater";
 import { createDb, OPENTRADE_HOME } from "../db/client";
 import { AgentRegistry } from "../services/agents/registry";
 import { analytics } from "../services/analytics";
@@ -67,7 +68,7 @@ async function main() {
   process.title = "OpenTrade Host";
   hostLog.info(`host starting (pid ${process.pid}) home=${OPENTRADE_HOME}`);
 
-  const db = createDb();
+  const db = createDb(hostLog);
   const registry = new AgentRegistry(db);
   registry.resetStatusesOnBoot();
 
@@ -229,10 +230,23 @@ async function main() {
   // host), tracked via the persisted `last_run_version`.
   analytics.track("host_started", afterCrash ? { after_crash: true } : undefined);
   const runVersion = process.env.OPENTRADE_VERSION ?? "0.0.0";
-  const prevVersion = settings.getOrCreate("last_run_version", () => runVersion);
+  // `""` = first run (no row yet): counts as a version change below, but is not an update.
+  const prevVersion = settings.getOrCreate("last_run_version", () => "");
   if (prevVersion !== runVersion) {
-    analytics.track("app_updated", { from_version: prevVersion, to_version: runVersion });
+    if (prevVersion) {
+      analytics.track("app_updated", { from_version: prevVersion, to_version: runVersion });
+    }
     settings.setRaw("last_run_version", runVersion);
+    // Installing a beta build enrolls the install in the beta channel (§14): whenever the
+    // running version *becomes* a prerelease — a fresh beta install, or a beta installed
+    // by hand over stable or over another beta — `updateChannel` flips to `beta`. It then
+    // stays there, through the graduation to the stable release, until the user turns it
+    // off in Settings → About; that explicit off holds until the next beta is installed by
+    // hand. (A same-value write is a no-op downstream: no telemetry, no updater re-check.)
+    if (isPrereleaseVersion(runVersion)) {
+      settings.update({ updateChannel: "beta" });
+      hostLog.info(`beta build ${runVersion} installed — update channel set to beta`);
+    }
   }
 
   // Heartbeat driving the `system.tick` subscription.

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ApprovalMode, HarnessId } from "./agent";
 import { NotificationKind } from "./notify";
+import { UpdateChannel } from "./settings";
 
 /**
  * The telemetry allowlist — the single source of truth for what OpenTrade may ever
@@ -117,6 +118,7 @@ const settingKey = z.enum([
   "notifyRestricted",
   "notifyUpdates",
   "showInMenuBar",
+  "updateChannel",
 ]);
 
 /** Onboarding step ids (mirrors renderer/screens/Onboarding.tsx). */
@@ -233,7 +235,7 @@ export const TELEMETRY_EVENTS = {
   // settings + telemetry lifecycle
   setting_changed: z.strictObject({
     key: settingKey,
-    value: z.union([z.boolean(), ApprovalMode]).optional(),
+    value: z.union([z.boolean(), ApprovalMode, UpdateChannel]).optional(),
   }),
   telemetry_enabled: z.strictObject({}),
   telemetry_disabled: z.strictObject({}),
