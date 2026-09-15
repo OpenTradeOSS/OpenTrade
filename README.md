@@ -72,6 +72,10 @@ Agents continue to get notified and work in the background, even if the app is c
 </tr>
 </table>
 
+Also included:
+
+- **Native support for Robinhood MCP.** Trade every instrument Robinhood's trading MCP exposes, including stocks, ETFs, options, and crypto. Also supported is the full research toolkit: quotes, historicals, fundamentals, news, SEC filings, earnings, technical indicators, scanners, watchlists, and price alerts.
+
 ## Install
 
 Download [OpenTrade-arm64.dmg](https://github.com/OpenTradeOSS/OpenTrade/releases/latest/download/OpenTrade-arm64.dmg)
