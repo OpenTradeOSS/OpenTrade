@@ -374,7 +374,8 @@ const FAILURE_CATEGORY: Partial<Record<WakeFailureCategory, string>> = {
 };
 
 /** The Outcome row: the state, with the classified failure category as its hint (the
- *  resume-vs-spawn reason is stored but deliberately not shown). */
+ *  resume-vs-spawn reason is stored but deliberately not shown — except `timed_out`,
+ *  which has no category and IS the explanation). */
 function outcomeRow(wake: Wake): DetailRow {
   switch (wake.outcome) {
     case "succeeded":
@@ -385,7 +386,9 @@ function outcomeRow(wake: Wake): DetailRow {
         <span key="v" className="text-red-400">
           Failed
         </span>,
-        (wake.failureCategory && FAILURE_CATEGORY[wake.failureCategory]) || null,
+        wake.failureReason === "timed_out"
+          ? "Hit the max run time"
+          : (wake.failureCategory && FAILURE_CATEGORY[wake.failureCategory]) || null,
       ];
     case "stopped":
       return [

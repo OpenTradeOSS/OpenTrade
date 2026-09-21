@@ -63,8 +63,15 @@ export interface SchedulerControl {
   /** The wake actually started: a headless child spawned, or the live session accepted
    *  it. Writes the History row (`outcome = running`) + the wake notification. */
   wakeStarted(wake: PendingWake, background: boolean): void;
-  /** The started wake settled. Called exactly once per `wakeStarted`. */
-  wakeFinished(wake: PendingWake, result: WakeResult): void;
+  /** The started wake settled. Called exactly once per `wakeStarted`. `run` carries
+   *  facts about a headless run that aren't part of its outcome (absent for warm). */
+  wakeFinished(wake: PendingWake, result: WakeResult, run?: HeadlessRunInfo): void;
+}
+
+/** What a headless run had, independent of how it ended. */
+export interface HeadlessRunInfo {
+  /** The run held an idle-sleep assertion for its lifetime (`sleep-guard.ts`). */
+  sleepGuardHeld: boolean;
 }
 
 /** A wake produced by the scheduler, carried through the coordinator's queue. `id` is

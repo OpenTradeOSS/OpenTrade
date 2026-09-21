@@ -1,7 +1,7 @@
 // Materialize native modules for packaging.
 //
-// Bun installs use an isolated store: `app/node_modules/better-sqlite3` and
-// `node-pty` are SYMLINKS into `node_modules/.bun/<pkg>@<ver>/node_modules/<pkg>`.
+// Bun installs use an isolated store: `app/node_modules/better-sqlite3`, `node-pty`
+// and `koffi` are SYMLINKS into `node_modules/.bun/<pkg>@<ver>/node_modules/<pkg>`.
 // electron-builder cannot follow symlinks into the asar, so a packaged build would
 // ship without the native `.node` binaries (and crash on boot).
 //
@@ -16,6 +16,13 @@
 //   2. better-sqlite3 only `require`s `bindings` (-> file-uri-to-path) at runtime;
 //      node-pty requires nothing extra. prebuild-install/node-addon-api are only
 //      used by `npm install` to fetch/compile the binary, which already happened.
+//
+// koffi (the FFI the host's sleep guard uses) is prebuilt and ships its binary in a
+// per-platform OPTIONAL package (`@koromix/koffi-<platform>-<arch>`), which bun keeps
+// as a bun-store sibling rather than under `app/node_modules`. Its loader also accepts
+// `<koffi>/build/koffi/<platform>_<arch>/koffi.node`, so the binary for THIS platform is
+// copied there and the optional deps are pruned — one self-contained directory, no
+// dependency-collector involvement.
 //
 // Idempotent-ish: skips packages that are already real, pruned dirs. Run it AFTER
 // `electron-builder install-app-deps` (so the copied `.node` is the Electron-ABI
@@ -47,8 +54,30 @@ const RUNTIME_DEPS = {
   bindings: ["file-uri-to-path"],
   "file-uri-to-path": [],
   "node-pty": [],
+  koffi: [],
 };
-const ENTRY_POINTS = ["better-sqlite3", "node-pty"];
+const ENTRY_POINTS = ["better-sqlite3", "node-pty", "koffi"];
+
+/**
+ * koffi's platform binary lives in `@koromix/koffi-<platform>-<arch>` next to koffi in
+ * the bun store. Copy it into the materialized koffi dir at the `build/koffi/<triplet>/`
+ * path its loader checks (see `loadDynamic` in koffi/src/koffi/index.cjs).
+ */
+function bundleKoffiBinary(srcRealDir, destDir) {
+  const triplet = `${process.platform}_${process.arch}`;
+  const pkg = join(dirname(srcRealDir), "@koromix", `koffi-${process.platform}-${process.arch}`);
+  const src = join(pkg, triplet, "koffi.node");
+  if (!existsSync(src)) {
+    // A build without the binary ships an app whose sleep guard silently never works
+    // (every install would report SleepGuardUnavailable) — fail the build instead.
+    console.error(`[copy-native] koffi: platform binary not found at ${src}`);
+    process.exit(1);
+  }
+  const dest = join(destDir, "build", "koffi", triplet, "koffi.node");
+  mkdirSync(dirname(dest), { recursive: true });
+  cpSync(src, dest);
+  console.log(`[copy-native] koffi: bundled ${triplet}/koffi.node`);
+}
 
 /**
  * Copy `srcRealDir` -> `destDir` (dereferencing symlinks), prune its package.json
@@ -104,6 +133,7 @@ for (const name of ENTRY_POINTS) {
   console.log(`[copy-native] materializing ${name} <- ${real}`);
   rmSync(link, { recursive: true, force: true }); // remove just the symlink (rmSync uses lstat, so it unlinks the symlink itself rather than following it; recursive+force keeps it working on Node ≥24, where a bare rmSync on a symlink-to-dir throws EISDIR)
   materialize(name, real, link);
+  if (name === "koffi") bundleKoffiBinary(real, link);
 }
 
 console.log("[copy-native] done");

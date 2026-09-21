@@ -526,11 +526,12 @@ describe("Scheduler CRUD", () => {
     });
     row("w5", "agent1", now - 5000, { outcome: "stopped" });
     row("w6", "agent1", now - 6000, { outcome: "running" });
+    row("w7", "agent2", now - 7000, { outcome: "failed", failureReason: "timed_out" });
     row("old", "agent1", now - 10 * 86_400_000, { outcome: "failed", failureCategory: "auth" }); // outside
 
     expect(scheduler.wakeStats(now - 7 * 86_400_000)).toEqual({
-      total: 6,
-      failed: 3,
+      total: 7,
+      failed: 4, // a max-runtime kill (`timed_out`) is a failure like any other
       stopped: 1,
       apiErrors: 2,
       topFailureCategory: "billing",

@@ -226,8 +226,10 @@ export const TELEMETRY_EVENTS = {
     path: z.enum(["warm", "headless"]),
     outcome: z.enum(["succeeded", "failed", "stopped"]),
     duration_ms: z.number().int().nonnegative(),
-    failure_reason: z.enum(["resume_fail", "spawn_fail", "api_error"]).optional(),
+    failure_reason: z.enum(["resume_fail", "spawn_fail", "api_error", "timed_out"]).optional(),
     failure_category: WakeFailureCategory.optional(),
+    /** Headless only: the run held an idle-sleep assertion (§12.2 "Sleep guard"). */
+    sleep_guard_held: z.boolean().optional(),
   }),
   agent_marked_broken: z.strictObject({}),
   turn_limit_reached: z.strictObject({}),

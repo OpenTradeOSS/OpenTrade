@@ -22,6 +22,7 @@ asarUnpack:
   - out/main/agent-mcp.js
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/node-pty/**"
+  - "**/node_modules/koffi/**"
 # Agent scaffolding reads these at runtime from Contents/Resources/ (see
 # resolveTemplatesDir / resolveHooksDir in services/agents/registry.ts). They live
 # at the repo root (outside app/), so copy them into the bundle's Resources dir —

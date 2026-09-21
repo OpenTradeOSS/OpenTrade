@@ -3,9 +3,11 @@ import type { ExecutionState } from "@shared/agent";
 import type { WakeFailureCategory } from "@shared/analytics";
 import type { AgentRegistry } from "../../agents/registry";
 import { WakeCoordinator } from "./coordinator";
+import type { SleepGuard } from "./sleep-guard";
 import type {
   HeadlessExit,
   HeadlessExitReason,
+  HeadlessRunInfo,
   HeadlessWakeStrategy,
   PendingWake,
   SchedulerControl,
@@ -61,15 +63,45 @@ class FakeHeadless implements HeadlessWakeStrategy {
   stopAll(): void {}
 }
 
+/** In-memory stand-in for the IOKit sleep guard: counts holds; `leak` makes releases
+ *  forget to decrement (a release that never lands), for the audit test. */
+class FakeSleepGuard implements SleepGuard {
+  holds = 0;
+  releaseAllCalls = 0;
+  leak = false;
+  lastReason = "";
+  lastTimeoutSec = 0;
+  hold(reason: string, timeoutSec: number): () => boolean {
+    this.holds += 1;
+    this.lastReason = reason;
+    this.lastTimeoutSec = timeoutSec;
+    return () => {
+      if (!this.leak) this.holds -= 1;
+      return true;
+    };
+  }
+  held(): number {
+    return this.holds;
+  }
+  releaseAll(): number {
+    this.releaseAllCalls += 1;
+    const n = this.holds;
+    this.holds = 0;
+    return n;
+  }
+}
+
 function make(maxHeadlessRunMs = 10_000, maxHeadlessTurns = 20, featureEnabled = true) {
   const reg = new FakeRegistry();
   const headless = new FakeHeadless();
+  const guard = new FakeSleepGuard(); // never take a real power assertion in tests
   const coord = new WakeCoordinator(reg as unknown as AgentRegistry, headless, {
     maxHeadlessRunMs: () => maxHeadlessRunMs,
     maxHeadlessTurns: () => maxHeadlessTurns,
     turnLimitFeatureEnabled: () => featureEnabled,
+    sleepGuard: guard,
   });
-  return { reg, headless, coord };
+  return { reg, headless, coord, guard };
 }
 
 let wakeSeq = 0;
@@ -83,13 +115,17 @@ function w(prompt: string): PendingWake {
 function makeRecorder() {
   const started: Array<{ prompt: string; background: boolean }> = [];
   const finished: Array<{ wakeId: string; result: WakeResult }> = [];
+  const runs: Array<HeadlessRunInfo | undefined> = []; // one per finished, in order
   const sched: SchedulerControl = {
     disarmAgent: () => {},
     rearmAgent: () => {},
     wakeStarted: (wake, background) => started.push({ prompt: wake.prompt, background }),
-    wakeFinished: (wake, result) => finished.push({ wakeId: wake.id, result }),
+    wakeFinished: (wake, result, run) => {
+      finished.push({ wakeId: wake.id, result });
+      runs.push(run);
+    },
   };
-  return { sched, started, finished };
+  return { sched, started, finished, runs };
 }
 
 /** Start a `/wake-stream` poll; returns the promise + its abort controller. */
@@ -128,12 +164,73 @@ describe("WakeCoordinator — headless transport (ported)", () => {
     headless.finishNext("ok");
   });
 
-  test("a headless run is killed by the max-runtime timer", async () => {
+  test("a headless run is killed by the max-runtime timer and settles failed/timed_out", async () => {
     const { headless, coord } = make(20); // tiny max-runtime
-    coord.enqueue("x", w("p1"));
+    const { sched, finished } = makeRecorder();
+    coord.setScheduler(sched);
+    const wake = w("p1");
+    coord.enqueue("x", wake);
+    coord.enqueue("x", w("p2")); // queued behind the run
     expect(headless.calls).toEqual(["x:p1"]);
     await wait(40); // kill timer fires → SIGTERM the child
     expect(headless.stops).toBe(1);
+    headless.finishNext("ok"); // the SIGTERM'd child exits — the strategy can't tell a kill apart
+    // The timer's flag is what makes it a `timed_out` failure (never `succeeded`), and
+    // the queue still drains: the wake is consumed, the next one starts.
+    expect(finished).toEqual([
+      { wakeId: wake.id, result: { outcome: "failed", failureReason: "timed_out" } },
+    ]);
+    expect(headless.calls).toEqual(["x:p1", "x:p2"]);
+    headless.finishNext("ok");
+    expect(finished[1]?.result).toEqual({ outcome: "succeeded" }); // flag was reset per run
+  });
+
+  test("a headless run holds the idle-sleep assertion for exactly its lifetime", () => {
+    const { headless, coord, guard } = make();
+    const { sched, runs } = makeRecorder();
+    coord.setScheduler(sched);
+    coord.enqueue("x", w("p1"));
+    expect(guard.holds).toBe(1); // taken at spawn
+    expect(guard.lastReason).toBe("OpenTrade: x agent is running a scheduled task"); // no name on the fake registry → id
+    expect(guard.lastTimeoutSec).toBe((10_000 + 5 * 60_000) / 1000); // run cap + 5 min, in seconds
+    headless.finishNext("ok");
+    expect(guard.holds).toBe(0); // released on exit
+    expect(guard.releaseAllCalls).toBe(0); // the audit found nothing to heal
+    expect(runs).toEqual([{ sleepGuardHeld: true }]); // reported with the outcome
+  });
+
+  test("an assertion still held after the run is force-released (the leak audit)", () => {
+    const { headless, coord, guard } = make();
+    guard.leak = true; // simulate a release that never lands
+    coord.enqueue("x", w("p1"));
+    headless.finishNext("ok");
+    expect(guard.releaseAllCalls).toBe(1);
+    expect(guard.holds).toBe(0);
+  });
+
+  test("a warm wake reports no run info", async () => {
+    const { coord } = make();
+    const { sched, runs } = makeRecorder();
+    coord.setScheduler(sched);
+    coord.onInteractiveUp("d");
+    coord.enqueue("d", w("p1"));
+    const { p } = poll(coord, "d");
+    await p;
+    coord.onTurnEnded("d");
+    expect(runs).toEqual([undefined]);
+  });
+
+  test("a user Stop after the kill timer fired (child not yet exited) reads stopped", async () => {
+    const { headless, coord } = make(20);
+    const { sched, finished } = makeRecorder();
+    coord.setScheduler(sched);
+    const wake = w("p1");
+    coord.enqueue("x", wake);
+    await wait(40); // timer fires: `timedOut` set, SIGTERM sent, child still "alive"
+    expect(headless.stops).toBe(1);
+    expect(coord.stop("x")).toBe(true); // the user's Stop overrides the timer's verdict
+    headless.finishNext("ok");
+    expect(finished).toEqual([{ wakeId: wake.id, result: { outcome: "stopped" } }]);
   });
 });
 

@@ -44,15 +44,16 @@ export type Monitor = z.infer<typeof Monitor>;
 /**
  * How a recorded wake ended. A row is written only when the run/turn actually starts
  * (`running`), then settles exactly once: `succeeded` (the headless child exited, or the
- * warm turn's Stop hook fired), `failed` (the child couldn't resume/spawn — see
+ * warm turn's Stop hook fired), `failed` (the run didn't complete — see
  * `WakeFailureReason`), or `stopped` (a user Stop / the live session went away mid-turn).
  */
 export const WakeOutcome = z.enum(["running", "succeeded", "failed", "stopped"]);
 export type WakeOutcome = z.infer<typeof WakeOutcome>;
 
-/** Why a wake failed: the session couldn't be resumed, the child never spawned, or the
- *  turn itself ended in an API error (Claude Code's `StopFailure` hook — warm or headless). */
-export const WakeFailureReason = z.enum(["resume_fail", "spawn_fail", "api_error"]);
+/** Why a wake failed: the session couldn't be resumed, the child never spawned, the turn
+ *  itself ended in an API error (Claude Code's `StopFailure` hook — warm or headless), or
+ *  the headless run hit the per-run max duration and the host ended it (`timed_out`). */
+export const WakeFailureReason = z.enum(["resume_fail", "spawn_fail", "api_error", "timed_out"]);
 export type WakeFailureReason = z.infer<typeof WakeFailureReason>;
 
 /** One recorded autonomy wake — a cron firing or a monitor trigger. */
