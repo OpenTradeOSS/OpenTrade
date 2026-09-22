@@ -51,6 +51,7 @@
     "croner": "9.0.0",
     "drizzle-orm": "0.45.2",
     "electron-updater": "6.6.2",
+    "koffi": "3.3.0",
     "lucide-react": "0.469.0",
     "nanoid": "5.1.6",
     "node-pty": "1.1.0",

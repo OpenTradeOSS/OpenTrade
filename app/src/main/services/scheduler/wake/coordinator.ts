@@ -5,8 +5,10 @@ import { hostLog } from "../../../host/log";
 import type { AgentRegistry } from "../../agents/registry";
 import { analytics } from "../../analytics";
 import { bus } from "../../event-bus";
+import { idleSleepGuard, type SleepGuard, SleepGuardLeak } from "./sleep-guard";
 import type {
   HeadlessExitReason,
+  HeadlessRunInfo,
   HeadlessWakeStrategy,
   InteractivePush,
   PendingWake,
@@ -20,11 +22,20 @@ const PUSH_RETRY_MS = 5_000;
 
 /** Default hard ceiling on a single headless run, INCLUDING time parked at the approval
  *  gate. The kill timer is the only timer in the wake layer; on expiry we SIGTERM the
- *  child and its exit drives `headlessExited` (a clean `ok`, not a resume-fail). The
+ *  child and its exit drives `headlessExited`, which settles the wake `failed`/`timed_out`
+ *  (the strategy reports the exit as `ok`; the writer's `timedOut` flag is what tells a
+ *  kill from a clean exit — never a resume-fail). The
  *  actual value is a live Settings tunable (`maxHeadlessRunMinutes`); this is the
  *  fallback when none is wired (tests/standalone). (If the kill lands mid-approval, the
  *  severed gate curl trips the existing `req.on("close")` → ApprovalService.abandon.) */
 const MAX_HEADLESS_RUN_MS = 30 * 60_000;
+/** Slack past the kill timer on a run's idle-sleep assertion: the timer is what bounds
+ *  the run; the assertion's own timeout only catches a release that never happens. */
+const SLEEP_GUARD_SLACK_MS = 5 * 60_000;
+/** How often the coordinator re-checks that nothing is held while no run is active
+ *  (the post-run check is the primary; this catches a leak from a path that never
+ *  reached it). */
+const SLEEP_GUARD_AUDIT_MS = 60 * 60_000;
 /** Consecutive headless resume-fails before an agent is declared unresumable. Each
  *  failure drops its own wake; the Nth in a row flips the agent to `broken`. Any clean
  *  exit resets the streak — normal timeouts throughout, no backoff. */
@@ -69,6 +80,10 @@ interface AgentWriterDeps {
   headless: HeadlessWakeStrategy;
   /** Live per-run max duration in ms (the kill-timer). */
   maxHeadlessRunMs: () => number;
+  /** Holds off idle sleep for a headless run's lifetime (`sleep-guard.ts`). */
+  sleepGuard: SleepGuard;
+  /** A headless run ended (any outcome) — the coordinator audits the sleep guard. */
+  onHeadlessDone: () => void;
   /** Live global per-agent turn budget. */
   maxHeadlessTurns: () => number;
   /** Live global on/off for the whole turn-limit feature. When off, no gating, counting,
@@ -82,7 +97,7 @@ interface AgentWriterDeps {
    *  enqueue — a wake that is dropped or never drained leaves no row) and settled exactly
    *  once when it ends. No-ops until a scheduler binds. */
   recordStarted: (wake: PendingWake, background: boolean) => void;
-  recordFinished: (wake: PendingWake, result: WakeResult) => void;
+  recordFinished: (wake: PendingWake, result: WakeResult, run?: HeadlessRunInfo) => void;
 }
 
 class AgentWriter {
@@ -111,15 +126,24 @@ class AgentWriter {
   private pushRetryTimer?: NodeJS.Timeout;
   /** Max-runtime kill for the active `-p` child (HEADLESS_RUNNING only). */
   private headlessKillTimer?: NodeJS.Timeout;
+  /** Releases the active run's idle-sleep assertion (HEADLESS_RUNNING only). */
+  private releaseSleepGuard?: () => boolean;
+  /** Whether the active run actually got its assertion (reported on `wake_finished`). */
+  private sleepGuardHeld = false;
   /** Consecutive headless resume-fails; reset by any clean exit. */
   private resumeFailCount = 0;
   /** Set when a user Stop SIGTERMs an in-flight child, so its exit is treated as a
    *  deliberate stop (→ OFFLINE) rather than a resume failure. */
   private stopping = false;
+  /** Set when the kill timer SIGTERMs the in-flight child, so its exit settles
+   *  `failed`/`timed_out` — the strategy reports a kill as `ok`, like any other exit. */
+  private timedOut = false;
 
   private readonly registry: AgentRegistry;
   private readonly headless: HeadlessWakeStrategy;
   private readonly maxHeadlessRunMs: () => number;
+  private readonly sleepGuard: SleepGuard;
+  private readonly onHeadlessDone: () => void;
   private readonly maxHeadlessTurns: () => number;
   private readonly turnLimitFeatureEnabled: () => boolean;
   private readonly onBroken: (id: string) => void;
@@ -134,6 +158,8 @@ class AgentWriter {
     this.registry = deps.registry;
     this.headless = deps.headless;
     this.maxHeadlessRunMs = deps.maxHeadlessRunMs;
+    this.sleepGuard = deps.sleepGuard;
+    this.onHeadlessDone = deps.onHeadlessDone;
     this.maxHeadlessTurns = deps.maxHeadlessTurns;
     this.turnLimitFeatureEnabled = deps.turnLimitFeatureEnabled;
     this.onBroken = deps.onBroken;
@@ -145,6 +171,11 @@ class AgentWriter {
     // scheduler's own boot sweep skips arming a broken agent, so no disarm is needed
     // here — this seed doesn't go through `transition`.)
     if (this.registry.executionStateOf(id) === "broken") this.state = "BROKEN";
+  }
+
+  /** A `-p` child is alive for this agent (so an assertion is legitimately held). */
+  get runningHeadless(): boolean {
+    return this.state === "HEADLESS_RUNNING";
   }
 
   // ---- producer / consumer ----
@@ -233,13 +264,16 @@ class AgentWriter {
     // HEADLESS_RUNNING). Its exit is then a deliberate stop, not a resume failure.
     if (this.state !== "HEADLESS_RUNNING") return false;
     this.stopping = true;
+    this.timedOut = false; // the user's Stop wins over a kill timer that already fired
     this.clearKillTimer();
     return this.headless.stop(this.id);
   }
 
-  /** Host shutdown: clear timers (the children are SIGTERM'd via stopAll). */
+  /** Host shutdown: clear timers + the sleep assertion (the children are SIGTERM'd via
+   *  stopAll). */
   dispose(): void {
     this.clearKillTimer();
+    this.releaseSleep();
     this.clearPushRetry();
   }
 
@@ -326,12 +360,23 @@ class AgentWriter {
     this.transition("HEADLESS_RUNNING");
     this.armKillTimer();
     this.headApiError = undefined; // belongs to the previous child, if ever set
+    this.timedOut = false;
     // Always count the run (no freeze while the feature is off — the count is reset
     // wholesale when the feature is re-enabled, so there's nothing to preserve). The
     // pause NOTIFICATION only makes sense when the feature + the agent's switch are on
     // and this run crossed the limit.
     const used = this.registry.incrementHeadlessTurns(this.id);
     const agent = this.registry.get(this.id);
+    // Nobody is at the machine during a headless run: hold off idle sleep until the
+    // child exits (released in `headlessExited`; timeout = the kill timer + slack). A
+    // previous run's assertion can't still be here — release defensively anyway.
+    this.releaseSleep();
+    const release = this.sleepGuard.hold(
+      `OpenTrade: ${agent?.name ?? this.id} agent is running a scheduled task`,
+      (this.maxHeadlessRunMs() + SLEEP_GUARD_SLACK_MS) / 1000,
+    );
+    this.releaseSleepGuard = release ?? undefined;
+    this.sleepGuardHeld = release !== null;
     if (
       this.turnLimitFeatureEnabled() &&
       agent?.turnLimitEnabled &&
@@ -384,36 +429,45 @@ class AgentWriter {
     failureCategory?: WakeFailureCategory,
   ): void {
     this.clearKillTimer();
+    this.releaseSleep();
     // A StopFailure hook that fired for this child (see `headApiError`): the turn ended
     // in an API error, whatever the exit code says. Its category is the authoritative
     // one — the hook's structured `error` beats a stderr-tail guess.
     const apiError = this.headApiError;
     this.headApiError = undefined;
+    // We killed the child ourselves — a user Stop or the max-runtime timer. Two distinct
+    // outcomes (user-initiated vs. a failure), one settle path; neither is a resume failure.
     if (this.stopping) {
-      // A deliberate user Stop killed the child — don't count it as a resume failure.
       this.stopping = false;
-      this.recordFinished(head, { outcome: "stopped" });
-      this.transition("OFFLINE");
-      this.drain(); // in case a fresh wake arrived during the stop window
+      this.finishKilled(head, { outcome: "stopped" });
+      return;
+    }
+    if (this.timedOut) {
+      this.timedOut = false;
+      this.finishKilled(head, { outcome: "failed", failureReason: "timed_out" });
       return;
     }
     if (reason === "spawnFail") {
       // A spawn error is a config fault, not a flaky session: one-strike broken.
-      this.recordFinished(head, {
-        outcome: "failed",
-        failureReason: "spawn_fail",
-        failureCategory,
-      });
+      this.recordFinished(
+        head,
+        { outcome: "failed", failureReason: "spawn_fail", failureCategory },
+        this.runInfo(),
+      );
       this.pending = [];
       this.transition("BROKEN");
       return;
     }
     if (reason === "resumeFail") {
-      this.recordFinished(head, {
-        outcome: "failed",
-        failureReason: "resume_fail",
-        failureCategory: apiError ?? failureCategory,
-      });
+      this.recordFinished(
+        head,
+        {
+          outcome: "failed",
+          failureReason: "resume_fail",
+          failureCategory: apiError ?? failureCategory,
+        },
+        this.runInfo(),
+      );
       this.pending.shift(); // drop the failed wake
       this.resumeFailCount += 1;
       if (this.resumeFailCount >= MAX_RESUME_FAILS) {
@@ -425,19 +479,35 @@ class AgentWriter {
       this.drain();
       return;
     }
-    // ok (clean exit, or the max-runtime backstop): complete the head, drain the next.
-    // An API-error turn exits "ok" too (past the fast-fail window) — StopFailure is what
-    // tells them apart. Routing is unchanged either way: the wake is consumed, not retried.
+    // ok (clean exit): complete the head, drain the next. An API-error turn exits "ok"
+    // too (past the fast-fail window) — StopFailure is what tells them apart. Routing is
+    // unchanged either way: the wake is consumed, not retried.
     this.recordFinished(
       head,
       apiError
         ? { outcome: "failed", failureReason: "api_error", failureCategory: apiError }
         : { outcome: "succeeded" },
+      this.runInfo(),
     );
     this.resumeFailCount = 0;
     this.pending.shift();
     this.transition("OFFLINE");
     this.drain();
+  }
+
+  /** Settle a run WE ended (Stop / kill timer): the child was running, so the session
+   *  resumed fine (streak reset); the wake is consumed, never retried — a recurring cron
+   *  re-fires on schedule. `shift` is a no-op after `stop()` emptied the queue. */
+  private finishKilled(head: PendingWake, result: WakeResult): void {
+    this.recordFinished(head, result, this.runInfo());
+    this.resumeFailCount = 0;
+    this.pending.shift();
+    this.transition("OFFLINE");
+    this.drain(); // in case a fresh wake arrived during the kill window
+  }
+
+  private runInfo(): HeadlessRunInfo {
+    return { sleepGuardHeld: this.sleepGuardHeld };
   }
 
   // ---- history recording ----
@@ -473,7 +543,8 @@ class AgentWriter {
     this.clearKillTimer();
     this.headlessKillTimer = setTimeout(() => {
       hostLog.warn("headless run exceeded max runtime; killing", this.id);
-      this.headless.stop(this.id); // SIGTERM; its exit drives headlessExited(ok)
+      this.timedOut = true;
+      this.headless.stop(this.id); // SIGTERM; its exit drives headlessExited
     }, this.maxHeadlessRunMs());
   }
 
@@ -484,11 +555,19 @@ class AgentWriter {
     }
   }
 
+  private releaseSleep(): void {
+    this.releaseSleepGuard?.();
+    this.releaseSleepGuard = undefined;
+  }
+
   /** Set the state and publish it as the agent's `executionState` (1:1, no projection). */
   private transition(next: WriterState): void {
     const prev = this.state;
     this.state = next;
     this.registry.setExecutionState(this.id, TO_EXECUTION_STATE[next]);
+    // Every way out of a headless run passes here — the moment to check nothing is
+    // still keeping the Mac awake.
+    if (prev === "HEADLESS_RUNNING" && next !== "HEADLESS_RUNNING") this.onHeadlessDone();
     if (next === "BROKEN" && prev !== "BROKEN") {
       analytics.track("agent_marked_broken");
       // Unresumable → pause this agent's scheduling so it stops firing into a dead
@@ -514,6 +593,10 @@ export class WakeCoordinator implements WakeTransport {
   private writers = new Map<string, AgentWriter>();
   /** Live read of the per-run max duration in ms (a Settings tunable). */
   private maxHeadlessRunMs: () => number;
+  /** Idle-sleep guard for headless runs; the real IOKit one unless a test injects a fake. */
+  private sleepGuard: SleepGuard;
+  /** Hourly leak audit (see `auditSleepGuard`); unref'd so it never holds the process. */
+  private sleepGuardAudit: NodeJS.Timeout;
   /** Live read of the global headless turn limit (a Settings tunable). */
   private maxHeadlessTurns: () => number;
   /** Live read of the global on/off for the whole turn-limit feature (a Settings toggle). */
@@ -529,9 +612,13 @@ export class WakeCoordinator implements WakeTransport {
       maxHeadlessRunMs?: () => number;
       maxHeadlessTurns?: () => number;
       turnLimitFeatureEnabled?: () => boolean;
+      sleepGuard?: SleepGuard;
     } = {},
   ) {
     this.maxHeadlessRunMs = opts.maxHeadlessRunMs ?? (() => MAX_HEADLESS_RUN_MS);
+    this.sleepGuard = opts.sleepGuard ?? idleSleepGuard;
+    this.sleepGuardAudit = setInterval(() => this.auditSleepGuard(), SLEEP_GUARD_AUDIT_MS);
+    this.sleepGuardAudit.unref();
     this.maxHeadlessTurns = opts.maxHeadlessTurns ?? (() => DEFAULT_SETTINGS.maxHeadlessTurns);
     this.turnLimitFeatureEnabled =
       opts.turnLimitFeatureEnabled ?? (() => DEFAULT_SETTINGS.headlessTurnLimitEnabled);
@@ -550,12 +637,14 @@ export class WakeCoordinator implements WakeTransport {
         registry: this.registry,
         headless: this.headless,
         maxHeadlessRunMs: this.maxHeadlessRunMs,
+        sleepGuard: this.sleepGuard,
+        onHeadlessDone: () => this.auditSleepGuard(),
         maxHeadlessTurns: this.maxHeadlessTurns,
         turnLimitFeatureEnabled: this.turnLimitFeatureEnabled,
         onBroken: (aid) => this.scheduler?.disarmAgent(aid),
         onUnbroken: (aid) => this.scheduler?.rearmAgent(aid),
         recordStarted: (wake, background) => this.scheduler?.wakeStarted(wake, background),
-        recordFinished: (wake, result) => this.scheduler?.wakeFinished(wake, result),
+        recordFinished: (wake, result, run) => this.scheduler?.wakeFinished(wake, result, run),
       });
       this.writers.set(id, w);
     }
@@ -597,7 +686,23 @@ export class WakeCoordinator implements WakeTransport {
   }
 
   stopAll(): void {
+    clearInterval(this.sleepGuardAudit);
     for (const w of this.writers.values()) w.dispose();
     this.headless.stopAll();
+  }
+
+  /**
+   * The invariant behind the sleep guard: an assertion is held iff some writer has a
+   * `-p` child alive. Checked after every headless run ends and hourly. A violation is
+   * a leak — the one way this feature could keep a user's Mac awake indefinitely — so
+   * it self-heals (force-release) and reports (`SleepGuardLeak` on `app_error`).
+   */
+  private auditSleepGuard(): void {
+    for (const w of this.writers.values()) if (w.runningHeadless) return;
+    const n = this.sleepGuard.held();
+    if (n === 0) return;
+    this.sleepGuard.releaseAll();
+    hostLog.error("sleep guard: assertion(s) held with no headless run active; released", n);
+    analytics.trackError("wake", new SleepGuardLeak(`${n} held with no run active`), "caught");
   }
 }

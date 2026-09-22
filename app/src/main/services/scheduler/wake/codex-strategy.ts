@@ -91,9 +91,10 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
           hostLog.warn("codex wake turn failed", agentId, result.error);
           settle("resumeFail", classifyWakeFailure(String(result.error)));
         } else if (result.outcome === "interrupted" && !acked) {
-          // Killed before delivery. A deliberate user Stop is handled by the
-          // coordinator's `stopping` short-circuit regardless of reason; for the
-          // kill-timer case, resumeFail keeps the wake from being marked delivered.
+          // Killed before delivery. Both kill paths (user Stop, the kill timer) are
+          // short-circuited by the coordinator's own `stopping` / `timedOut` flags before
+          // the reason is read; resumeFail here only guards against an unexpected
+          // interrupt being mistaken for a delivered turn.
           hostLog.warn("codex wake interrupted before delivery", agentId);
           settle("resumeFail");
         } else {

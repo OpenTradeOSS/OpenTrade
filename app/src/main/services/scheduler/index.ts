@@ -24,7 +24,7 @@ import { buildAgentEnv } from "../terminal/env";
 import { CronTimer } from "./cron-timer";
 import { MonitorRunner } from "./monitor-runner";
 import { systemTimeZone } from "./system-timezone";
-import type { PendingWake, WakeResult, WakeTransport } from "./wake/types";
+import type { HeadlessRunInfo, PendingWake, WakeResult, WakeTransport } from "./wake/types";
 
 /**
  * Durable autonomy scheduler, owned by the always-on backend host. Arms cron
@@ -558,7 +558,7 @@ export class Scheduler {
 
   /** The started wake settled: stamp its outcome (+ failure detail) and finish time, and
    *  track it — this is the one place that knows the final outcome on either path. */
-  wakeFinished(wake: PendingWake, result: WakeResult): void {
+  wakeFinished(wake: PendingWake, result: WakeResult, run?: HeadlessRunInfo): void {
     const finishedAt = Date.now();
     // One guarded UPDATE: only a row still `running` settles, so a wake that never
     // started (agent archived meanwhile) or was already settled is a no-op — exactly-once
@@ -583,6 +583,7 @@ export class Scheduler {
       duration_ms: Math.max(0, finishedAt - row.firedAt),
       ...(result.failureReason ? { failure_reason: result.failureReason } : {}),
       ...(result.failureCategory ? { failure_category: result.failureCategory } : {}),
+      ...(run ? { sleep_guard_held: run.sleepGuardHeld } : {}),
     });
     bus.emitEvent("scheduler:changed", { agentId: wake.agentId });
   }
