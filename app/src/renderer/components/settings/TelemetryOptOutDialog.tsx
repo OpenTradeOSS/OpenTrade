@@ -11,7 +11,7 @@ import {
 } from "../ui/alert-dialog";
 
 /** The OpenTrade community Discord — the opt-out alternative feedback channel. */
-export const OPENTRADE_DISCORD_URL = "https://discord.gg/F63YFPRtq";
+export const OPENTRADE_DISCORD_URL = "https://discord.gg/KDDCRHyJad";
 
 /**
  * Every event in the `shared/analytics.ts` allowlist, bucketed three ways. The dialog
