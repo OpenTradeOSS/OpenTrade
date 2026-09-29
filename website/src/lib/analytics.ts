@@ -20,7 +20,8 @@ const POSTHOG_HOST = "https://r.exla.ai";
  *  point at the ingest proxy, which doesn't serve the UI. */
 const POSTHOG_UI_HOST = "https://us.posthog.com";
 
-/** The complete set of events this site sends by hand. Pageviews/autocapture are automatic. */
+/** The events this site sends through the SDK by hand. Pageviews/autocapture are automatic.
+ *  The mailing-list signup (`email_subscribed`) bypasses the SDK — see `subscribeEmail`. */
 export type WebsiteEvent = "download_clicked" | "github_clicked" | "x_clicked";
 
 /**
@@ -58,4 +59,54 @@ export function initAnalytics(): void {
  */
 export function track(event: WebsiteEvent): void {
   void client?.then((posthog) => posthog.capture(event));
+}
+
+/** Loose shape check; the input's `type="email"` does the user-facing validation. */
+export function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+}
+
+/**
+ * Record a mailing-list signup as an `email_subscribed` event in the website's PostHog
+ * project. PostHog is the only store: each address becomes a person (distinct id = the
+ * lowercased address, `email` set as a person property), so repeat signups collapse onto
+ * one person and the Persons list is the subscriber list.
+ *
+ * This posts straight to the capture endpoint rather than going through `posthog-js`,
+ * because the SDK's `capture()` is fire-and-forget: a blocked or failed request would still
+ * show the visitor a success message and silently lose the address. A direct `fetch` lets the
+ * form report failure. Note the endpoint answers 200 for any well-formed payload (even an
+ * unknown key), so a resolved promise means "reached ingestion", not "key verified".
+ *
+ * Rejects on a network error or non-2xx response. Inert like the rest of this module: with
+ * no key, or in dev, it logs and resolves, so the form can be exercised locally.
+ */
+export async function subscribeEmail(rawEmail: string): Promise<void> {
+  const email = rawEmail.trim().toLowerCase();
+  if (!isValidEmail(email)) throw new Error("invalid email");
+
+  const key = import.meta.env.VITE_POSTHOG_KEY ?? "";
+  if (!key || !import.meta.env.PROD) {
+    console.info("[analytics inert] email_subscribed", email);
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const res = await fetch(`${POSTHOG_HOST}/i/v0/e/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: key,
+      event: "email_subscribed",
+      distinct_id: email,
+      timestamp: now,
+      properties: {
+        email,
+        $current_url: window.location.href,
+        $set: { email },
+        $set_once: { email_subscribed_at: now },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`capture failed: HTTP ${res.status}`);
 }

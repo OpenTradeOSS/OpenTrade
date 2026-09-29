@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 
+import { EmailSignup } from "./email-signup";
 import { almarai, instrumentSerif } from "./fonts";
 import { Hero } from "./hero";
 
@@ -18,6 +19,7 @@ export default function CreativeStudio() {
       }}
     >
       <Hero />
+      <EmailSignup />
     </div>
   );
 }

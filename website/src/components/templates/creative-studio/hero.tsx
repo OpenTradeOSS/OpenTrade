@@ -74,10 +74,11 @@ function HeroCopy({ reduce }: { reduce: boolean | null }) {
           {...fade(0.7)}
           className="flex w-full max-w-md flex-wrap items-center gap-3 xl:w-max xl:max-w-none xl:flex-nowrap"
         >
+          {/* Hidden in the phone layout: the download is a macOS installer, useless on a phone. */}
           <a
             href={DOWNLOAD_URL}
             onClick={() => track("download_clicked")}
-            className="group inline-flex w-fit items-center gap-2 rounded-full bg-(--cs-ink) py-1.5 pe-1.5 ps-5 text-sm font-medium text-black transition-all duration-300 hover:gap-3 sm:text-base"
+            className="group hidden w-fit items-center sm:inline-flex gap-2 rounded-full bg-(--cs-ink) py-1.5 pe-1.5 ps-5 text-sm font-medium text-black transition-all duration-300 hover:gap-3 sm:text-base"
           >
             Download for macOS
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black transition-transform duration-300 group-hover:scale-110 sm:h-10 sm:w-10">
@@ -141,27 +142,47 @@ function MobileHero({ reduce }: { reduce: boolean | null }) {
         </div>
       </div>
 
-      {/* Foreground aperture: masks scrolling screenshots beneath the black viewport frame. */}
-      <div
-        aria-hidden
-        className="pointer-events-none fixed left-4 right-4 top-4 z-[6] h-[calc(100lvh-2rem)] rounded-2xl shadow-[0_0_0_100vmax_#000]"
-      />
+      {/* Foreground layer, sticky like the stage (pulled up over it by the negative margin), so
+          both stay pinned while the screenshots scroll and then leave together, as normal
+          scrolling, once the section ends — revealing whatever follows the hero. Sticky rather
+          than fixed for exactly that release; `z-10` keeps it above the screenshots (`z-[5]`). */}
+      {/* The layer is 8rem taller than the viewport, with that strip painted solid black. iOS 26
+          Safari draws page content under its floating toolbar, *below* 100lvh; while the mask was
+          `fixed` the aperture's 100vmax shadow covered that strip, but a sticky layer's shadow
+          outside its own box isn't painted on first load, so the screenshots showed through at
+          the bottom until the first scroll. The screenshots' pull-up and bottom padding, and the
+          signup's negative top margin, all absorb the same 8rem, so release timing is unchanged. */}
+      <div className="pointer-events-none sticky top-0 z-10 -mt-[100dvh] h-[calc(100lvh+8rem)]">
+        <div aria-hidden className="absolute inset-x-0 bottom-0 top-[calc(100lvh-1rem)] bg-black" />
 
-      {/* iOS 26 mispaints `position: fixed; bottom: 0`. Anchor from the top of the
-          large viewport instead; this is a static CSS transform with no scroll work. */}
-      <div
-        className="pointer-events-none fixed inset-x-4 top-0 z-10"
-        style={{ transform: "translateY(calc(100lvh - 100% - 1rem))" }}
-      >
-        <footer className="pointer-events-auto relative isolate overflow-hidden rounded-b-2xl px-4 pb-4 pt-24">
-          <Scrim className="pointer-events-none absolute inset-0 -z-10" />
-          <HeroCopy reduce={reduce} />
-        </footer>
+        {/* Aperture: masks the scrolling screenshots beneath the black viewport frame. */}
+        <div
+          aria-hidden
+          className="absolute left-4 right-4 top-4 h-[calc(100lvh-2rem)] rounded-2xl shadow-[0_0_0_100vmax_#000]"
+        />
+
+        {/* iOS 26 mispaints `bottom: 0` against the viewport. Anchor from the top of the large
+            viewport instead; this is a static CSS transform with no scroll work.
+            The footer overhangs the aperture's hole by 1px on the sides and bottom: were the two
+            rounded edges coincident, both antialiased fringes would be part-transparent and the
+            light backdrop photo would leak through as a faint outline. Overhanging puts the
+            footer's fringe over the aperture's solid black instead. */}
+        <div
+          className="absolute inset-x-[calc(1rem-1px)] top-0"
+          style={{ transform: "translateY(calc(100lvh - 100% - 1rem + 1px))" }}
+        >
+          {/* `pt` is 6rem plus the 3.75rem the hidden download row (48px pill + 12px gap) used to
+              take, so the scrim keeps its height and still hides the next screenshot's top edge. */}
+          <footer className="pointer-events-auto relative isolate overflow-hidden rounded-b-2xl px-4 pb-4 pt-[9.75rem]">
+            <Scrim className="pointer-events-none absolute inset-0 -z-10" />
+            <HeroCopy reduce={reduce} />
+          </footer>
+        </div>
       </div>
 
       {/* Both screenshots use normal document scrolling: no listeners or per-frame transforms. */}
-      <div className="relative z-[5] -mt-[100dvh] px-4">
-        <div className="flex flex-col gap-[10svh] overflow-x-hidden rounded-2xl pb-[25svh] pt-[4svh]">
+      <div className="relative z-[5] -mt-[calc(100lvh+8rem)] px-4">
+        <div className="flex flex-col gap-[10svh] overflow-x-hidden rounded-2xl pb-[calc(25svh+8rem)] pt-[4svh]">
           <img
             src={appWindow}
             alt="The OpenTrade app showing the agent sidebar and live coding terminal"
