@@ -1,3 +1,5 @@
+import { APP_DISPLAY_NAME } from "@shared/app-identity";
+import { FEATURES } from "@shared/feature-flags";
 import { AlertTriangle, ArrowRight, Check, ExternalLink, Loader2, Terminal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { FeatureShowcase } from "../components/onboarding/FeatureShowcase";
@@ -5,6 +7,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { VaultPanel } from "../components/vault/VaultPanel";
 import { useTrackEvent } from "../hooks/useAnalytics";
 import { useBrokerStatus } from "../hooks/useBroker";
 import { useUpdateSettings } from "../hooks/useSettings";
@@ -12,19 +15,24 @@ import { trpc } from "../lib/trpc";
 import { cn } from "../lib/utils";
 import { useUIStore } from "../stores/ui";
 
-type Step = "claude" | "broker" | "showcase" | "agent";
-const STEPS: Step[] = ["claude", "broker", "showcase", "agent"];
+type Step = "claude" | "broker" | "vault" | "showcase" | "agent";
+// The Key Vault step is experimental (`FEATURES.venues`, Nightly only).
+const STEPS: Step[] = FEATURES.venues
+  ? ["claude", "broker", "vault", "showcase", "agent"]
+  : ["claude", "broker", "showcase", "agent"];
 const STEP_LABELS: Record<Step, string> = {
   claude: "Agent CLI",
   broker: "Robinhood",
+  vault: "Key Vault",
   showcase: "Features",
   agent: "First agent",
 };
 
 /**
  * First-run wizard. Confirm an agent CLI (Claude Code / Codex) is installed, connect Robinhood
- * (optional; the panel degrades without it), show a quick feature showcase, then
- * create the first agent. Finishing (or skipping the last step) persists
+ * (optional; the panel degrades without it), add optional venue/data keys to the Key
+ * Vault (Kalshi, PMXT — also reachable later from the sidebar), show a quick feature
+ * showcase, then create the first agent. Finishing (or skipping the last step) persists
  * `onboardingComplete`, which is what App.tsx gates on.
  */
 export function Onboarding() {
@@ -52,7 +60,7 @@ export function Onboarding() {
     <div className="flex h-full w-full items-center justify-center bg-background p-8">
       <div className={cn("w-[30rem]", step === "showcase" && "w-full max-w-5xl")}>
         <div className="mb-6 text-center">
-          <h1 className="text-lg font-semibold text-foreground">OpenTrade</h1>
+          <h1 className="text-lg font-semibold text-foreground">{APP_DISPLAY_NAME}</h1>
         </div>
 
         <Stepper current={step} />
@@ -63,6 +71,7 @@ export function Onboarding() {
           <Card className="mt-6 rounded-lg p-5">
             {step === "claude" && <ClaudeStep onNext={next} />}
             {step === "broker" && <BrokerStep onNext={next} />}
+            {step === "vault" && <VaultStep onNext={next} />}
             {step === "agent" && <AgentStep onDone={finish} pending={finishSettings.isPending} />}
           </Card>
         )}
@@ -97,13 +106,13 @@ function Stepper({ current }: { current: Step }) {
           </div>
           <span
             className={cn(
-              "text-xs",
+              "whitespace-nowrap text-xs",
               i === currentIdx ? "text-foreground" : "text-muted-foreground",
             )}
           >
             {STEP_LABELS[s]}
           </span>
-          {i < STEPS.length - 1 && <div className="h-px w-6 bg-border" />}
+          {i < STEPS.length - 1 && <div className="h-px w-4 bg-border" />}
         </div>
       ))}
     </div>
@@ -198,6 +207,8 @@ function BrokerStep({ onNext }: { onNext: () => void }) {
         <p className="mt-1 text-sm text-muted-foreground">
           OpenTrade keeps its own read-only Robinhood MCP session to power the portfolio panel. This
           opens a browser for a one-time login.
+          {FEATURES.venues &&
+            " Optional: skip it if you only trade Kalshi, and turn Robinhood off for agents in the next step."}
         </p>
       </div>
 
@@ -326,6 +337,36 @@ function RobinhoodMcpCheck() {
           How to connect your AI agent <ExternalLink className="size-3" />
         </a>
       )}
+    </div>
+  );
+}
+
+/**
+ * Optional venues and data providers. Same panel as the sidebar's Key Vault, so what
+ * the user sets here is what they'll find there later. Never gating: every
+ * integration is optional.
+ */
+function VaultStep({ onNext }: { onNext: () => void }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <h2 className="text-sm font-medium">Key Vault</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Add the venues and data your agents can use. Kalshi lets agents trade event contracts
+          (orders still need your approval), and PMXT gives them read-only prediction-market data.
+          All optional; you can change this any time from Key Vault in the sidebar.
+        </p>
+      </div>
+
+      <div className="-mx-1 max-h-[26rem] overflow-y-auto px-1">
+        <VaultPanel compact />
+      </div>
+
+      <div className="flex justify-end">
+        <Button type="button" onClick={onNext}>
+          Continue <ArrowRight className="size-4" />
+        </Button>
+      </div>
     </div>
   );
 }

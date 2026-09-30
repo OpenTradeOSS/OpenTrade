@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { OPENTRADE_HOME } from "../../db/client";
+import { integrationEnv } from "../integrations";
 
 /**
  * Build the environment for an agent's PTY. We inherit the app's env, ensure the
@@ -14,6 +15,10 @@ import { OPENTRADE_HOME } from "../../db/client";
  * bills the user's logged-in subscription instead of silently hitting an API key —
  * the whole app env is inherited, so a key in the user's shell would otherwise
  * leak into every unattended run (the "unattended runs bill the API" cost bug).
+ *
+ * Integration env from the Key Vault (e.g. `PMXT_API_KEY`, which the agents' PMXT MCP
+ * entries reference by name) is layered in here — the single choke point every agent
+ * spawn (PTY, headless wake, codex app-server) goes through.
  */
 export function buildAgentEnv(
   agentId: string,
@@ -29,7 +34,7 @@ export function buildAgentEnv(
 
   const home = homedir();
   const extraPathDirs = [
-    join(home, ".opentrade", "bin"),
+    join(OPENTRADE_HOME, "bin"),
     join(home, ".local", "bin"),
     join(home, ".bun", "bin"),
     join(home, "bin"),
@@ -47,5 +52,5 @@ export function buildAgentEnv(
   base.OPENTRADE_AGENT_ID = agentId;
   base.OPENTRADE_HOME = OPENTRADE_HOME;
 
-  return { ...base, ...extra };
+  return { ...base, ...integrationEnv(), ...extra };
 }

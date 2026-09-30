@@ -10,6 +10,8 @@ import type { Scheduler } from "../services/scheduler";
 import type { WakeTransport } from "../services/scheduler/wake/types";
 import type { SettingsService } from "../services/settings";
 import type { TerminalService } from "../services/terminal";
+import type { VaultService } from "../services/vault";
+import type { KalshiService } from "../services/venues/kalshi";
 
 export interface Context {
   db: Db;
@@ -23,6 +25,9 @@ export interface Context {
   wake: WakeTransport;
   /** Durable Recent ring buffer behind `notifications.onRecent` (§12.6). */
   recent: RecentNotificationsService;
+  /** Key Vault: venue credentials + integration switches. */
+  vault: VaultService;
+  kalshi: KalshiService;
 }
 
 const t = initTRPC.context<Context>().create({ transformer: superjson });

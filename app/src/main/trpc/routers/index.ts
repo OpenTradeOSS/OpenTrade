@@ -5,12 +5,14 @@ import { analyticsRouter } from "./analytics";
 import { approvalsRouter } from "./approvals";
 import { brokerRouter } from "./broker";
 import { feedbackRouter } from "./feedback";
+import { kalshiRouter } from "./kalshi";
 import { notificationsRouter } from "./notifications";
 import { onboardingRouter } from "./onboarding";
 import { scheduleRouter } from "./schedule";
 import { settingsRouter } from "./settings";
 import { systemRouter } from "./system";
 import { terminalRouter } from "./terminal";
+import { vaultRouter } from "./vault";
 
 export const appRouter = router({
   system: systemRouter,
@@ -25,6 +27,8 @@ export const appRouter = router({
   analytics: analyticsRouter,
   feedback: feedbackRouter,
   notifications: notificationsRouter,
+  vault: vaultRouter,
+  kalshi: kalshiRouter,
 });
 
 export type AppRouter = typeof appRouter;

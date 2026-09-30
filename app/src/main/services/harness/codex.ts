@@ -16,11 +16,14 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import type { Agent } from "@shared/agent";
 import { GATED_TOOL_MATCHER, GATED_TOOLS } from "@shared/robinhood-tools";
+import { type AgentIntegrations, KEY_NAMES_ENV, PMXT_KEY_ENV } from "@shared/vault";
 import { OPENTRADE_HOME } from "../../db/client";
 import { hostLog } from "../../host/log";
-import { resolveAgentMcp, resolveHooksDir } from "../agents/paths";
+import { resolveAgentMcp, resolveHooksDir, resolveKalshiMcp } from "../agents/paths";
 import { bus } from "../event-bus";
+import { agentIntegrations, integrationEnv } from "../integrations";
 import { type CodexAppServerManager, codexHomeFor } from "./codex-app-server";
+import { PMXT_DENIED_TOOLS, PMXT_MCP_URL } from "./integrations-config";
 import { codexConfigHasRobinhood, ROBINHOOD_MCP_URL } from "./robinhood-mcp";
 import type { Harness, ProbeResult, SessionMode } from "./types";
 
@@ -327,14 +330,7 @@ network_access = false
 [projects.${tomlKey(trustedDir)}]
 trust_level = "trusted"
 
-[mcp_servers.robinhood]
-url = "${ROBINHOOD_MCP_URL}"
-default_tools_approval_mode = "approve"
-
-${GATED_TOOLS.map((t) => `[mcp_servers.robinhood.tools.${t}]\napproval_mode = "prompt"`).join(
-  "\n\n",
-)}
-
+${integrationServersToml(agentIntegrations(), agentId)}
 [mcp_servers.opentrade]
 command = ${JSON.stringify(process.execPath)}
 args = [${JSON.stringify(resolveAgentMcp())}]
@@ -345,7 +341,8 @@ ELECTRON_RUN_AS_NODE = "1"
 OPENTRADE_HARNESS = "codex"
 OPENTRADE_HOME = ${JSON.stringify(OPENTRADE_HOME)}
 OPENTRADE_AGENT_ID = ${JSON.stringify(agentId)}
-${hooksState}`;
+${keyNamesToml()}
+${vaultShellEnvToml(integrationEnv())}${hooksState}`;
       writeFileSync(configPath, config);
     },
 
@@ -371,6 +368,70 @@ ${hooksState}`;
       }
     },
   };
+}
+
+/**
+ * The `config.toml` MCP sections for the Key Vault's enabled integrations. Robinhood
+ * keeps its fail-closed per-tool `"prompt"` anchor. Kalshi is pre-approved at the codex
+ * layer because its money-movers are gated in the host (KalshiService) before anything
+ * reaches the venue; its tool timeout outlasts the longest approval window (3600s)
+ * so a pending card isn't cut off. PMXT is read-only: its order/wallet tools are
+ * disabled, and the key comes from the server env (`bearer_token_env_var`), never
+ * this file.
+ */
+export function integrationServersToml(on: AgentIntegrations, agentId: string): string {
+  const parts: string[] = [];
+  if (on.robinhood) {
+    parts.push(`[mcp_servers.robinhood]
+url = "${ROBINHOOD_MCP_URL}"
+default_tools_approval_mode = "approve"
+
+${GATED_TOOLS.map((t) => `[mcp_servers.robinhood.tools.${t}]\napproval_mode = "prompt"`).join("\n\n")}
+`);
+  }
+  if (on.kalshi) {
+    parts.push(`[mcp_servers.kalshi]
+command = ${JSON.stringify(process.execPath)}
+args = [${JSON.stringify(resolveKalshiMcp())}]
+default_tools_approval_mode = "approve"
+tool_timeout_sec = 3700
+
+[mcp_servers.kalshi.env]
+ELECTRON_RUN_AS_NODE = "1"
+OPENTRADE_HOME = ${JSON.stringify(OPENTRADE_HOME)}
+OPENTRADE_AGENT_ID = ${JSON.stringify(agentId)}
+`);
+  }
+  if (on.pmxt) {
+    parts.push(`[mcp_servers.pmxt]
+url = "${PMXT_MCP_URL}"
+bearer_token_env_var = "${PMXT_KEY_ENV}"
+default_tools_approval_mode = "approve"
+disabled_tools = [${PMXT_DENIED_TOOLS.map((t) => JSON.stringify(t)).join(", ")}]
+`);
+  }
+  return parts.join("\n");
+}
+
+/** The opentrade MCP's view of which vault keys exist (names only — for its instructions). */
+function keyNamesToml(): string {
+  const names = integrationEnv()[KEY_NAMES_ENV];
+  return names ? `${KEY_NAMES_ENV} = ${JSON.stringify(names)}\n` : "";
+}
+
+/**
+ * Key Vault keys for the agent's SHELL. Codex drops env vars whose names contain KEY /
+ * SECRET / TOKEN from shell commands by default, so the vault's keys (which is exactly
+ * what they're named) must be set explicitly for scripts and curl to see them. This
+ * file lives in the agent's CODEX_HOME under the 0700 OpenTrade home, never in the
+ * agent folder.
+ */
+export function vaultShellEnvToml(env: Record<string, string>): string {
+  const entries = Object.entries(env);
+  if (entries.length === 0) return "";
+  return `\n[shell_environment_policy.set]\n${entries
+    .map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
+    .join("\n")}\n`;
 }
 
 /** lstat that answers "does anything exist at this path" (incl. a dangling link). */

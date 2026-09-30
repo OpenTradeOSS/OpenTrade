@@ -11,8 +11,16 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { GATED_TOOL_MATCHER, PREALLOWED_TOOL_PATTERNS } from "@shared/robinhood-tools";
+import { GATED_TOOL_MATCHER } from "@shared/robinhood-tools";
+import type { AgentIntegrations } from "@shared/vault";
 import { resolveHooksDir } from "../agents/paths";
+import { agentIntegrations } from "../integrations";
+import {
+  claudeAllow,
+  claudeDeny,
+  claudeEnabledServers,
+  writeClaudeMcpJson,
+} from "./integrations-config";
 import { claudeConfigHasRobinhood } from "./robinhood-mcp";
 import type { Harness, ProbeResult, SessionMode } from "./types";
 
@@ -31,65 +39,70 @@ const execFileAsync = promisify(execFile);
  * build-independent and self-heals agents created by an older/ungated build.
  * `$CLAUDE_PROJECT_DIR` resolves to the agent folder, so the hooks stay agent-scoped
  * (never the user's global `~/.claude`).
+ *
+ * The server list and allow/deny rules follow the Key Vault's integration switches
+ * (`integrations-config.ts`); the Robinhood gate hooks are wired regardless — with
+ * Robinhood off they simply never match.
  */
-const CLAUDE_SETTINGS_JSON = `${JSON.stringify(
-  {
-    $schema: "https://json.schemastore.org/claude-code-settings.json",
-    enabledMcpjsonServers: ["robinhood", "opentrade"],
-    permissions: {
-      allow: [...PREALLOWED_TOOL_PATTERNS, "mcp__opentrade__*"],
-      deny: [],
+export const claudeSettingsJson = (on: AgentIntegrations): string =>
+  `${JSON.stringify(
+    {
+      $schema: "https://json.schemastore.org/claude-code-settings.json",
+      enabledMcpjsonServers: claudeEnabledServers(on),
+      permissions: {
+        allow: claudeAllow(on),
+        deny: claudeDeny(on),
+      },
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: GATED_TOOL_MATCHER,
+            hooks: [
+              {
+                type: "command",
+                command: "$CLAUDE_PROJECT_DIR/.claude/hooks/approval-gate.sh",
+                timeout: 600,
+              },
+            ],
+          },
+        ],
+        PostToolUse: [
+          {
+            matcher: GATED_TOOL_MATCHER,
+            hooks: [
+              { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/order-result.sh" },
+            ],
+          },
+        ],
+        Notification: [
+          {
+            hooks: [
+              { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
+            ],
+          },
+        ],
+        Stop: [
+          {
+            hooks: [
+              { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
+            ],
+          },
+        ],
+        // Fires INSTEAD of Stop when the turn ends in an API error (billing, auth, rate
+        // limit, server/connection failure). Same forwarder: the host reads
+        // `hook_event_name` + `error` and settles the outstanding wake as failed (§12.2).
+        StopFailure: [
+          {
+            hooks: [
+              { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
+            ],
+          },
+        ],
+      },
     },
-    hooks: {
-      PreToolUse: [
-        {
-          matcher: GATED_TOOL_MATCHER,
-          hooks: [
-            {
-              type: "command",
-              command: "$CLAUDE_PROJECT_DIR/.claude/hooks/approval-gate.sh",
-              timeout: 600,
-            },
-          ],
-        },
-      ],
-      PostToolUse: [
-        {
-          matcher: GATED_TOOL_MATCHER,
-          hooks: [
-            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/order-result.sh" },
-          ],
-        },
-      ],
-      Notification: [
-        {
-          hooks: [
-            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
-          ],
-        },
-      ],
-      Stop: [
-        {
-          hooks: [
-            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
-          ],
-        },
-      ],
-      // Fires INSTEAD of Stop when the turn ends in an API error (billing, auth, rate
-      // limit, server/connection failure). Same forwarder: the host reads
-      // `hook_event_name` + `error` and settles the outstanding wake as failed (§12.2).
-      StopFailure: [
-        {
-          hooks: [
-            { type: "command", command: "$CLAUDE_PROJECT_DIR/.claude/hooks/status-notify.sh" },
-          ],
-        },
-      ],
-    },
-  },
-  null,
-  2,
-)}\n`;
+    null,
+    2,
+  )}\n`;
 
 /**
  * `--dangerously-load-development-channels` is a VARIADIC flag (`<servers...>`):
@@ -127,6 +140,10 @@ export const claudeHarness: Harness = {
   },
 
   writeConfig(agentDir: string): void {
+    // The agent's MCP servers + permissions follow the Key Vault (read fresh per spawn,
+    // so a switch flipped in the vault applies on the next launch).
+    const on = agentIntegrations();
+    writeClaudeMcpJson(agentDir, on);
     // Generate the order-gate config in the agent's OWN .claude folder (project-scoped;
     // never the user's global ~/.claude). Runs at scaffold AND before every spawn, so it
     // heals agents that a clean CI build created without the (untracked) template
@@ -135,7 +152,7 @@ export const claudeHarness: Harness = {
     const claudeDir = join(agentDir, ".claude");
     const hooksDir = join(claudeDir, "hooks");
     mkdirSync(hooksDir, { recursive: true });
-    writeFileSync(join(claudeDir, "settings.json"), CLAUDE_SETTINGS_JSON);
+    writeFileSync(join(claudeDir, "settings.json"), claudeSettingsJson(on));
     const hooksSrc = resolveHooksDir();
     if (existsSync(hooksSrc)) {
       for (const file of readdirSync(hooksSrc)) {

@@ -23,6 +23,7 @@
 // also makes silent check failures — e.g. a release published with no
 // `latest-mac.yml` asset — visible instead of dying in a console log nobody reads.
 
+import { APP_DISPLAY_NAME, IS_NIGHTLY } from "@shared/app-identity";
 import type { UpdateChannel } from "@shared/settings";
 import { UPDATER_IPC, type UpdaterState } from "@shared/updater";
 import { app, BrowserWindow, ipcMain } from "electron";
@@ -95,8 +96,8 @@ function wireEvents(): void {
     // the window was focused, a later background re-check should still get the chance.
     if (notifiedVersion !== info.version) {
       const shown = hooks.showNotification?.(
-        "OpenTrade update available",
-        `Version ${info.version} is available. Open OpenTrade to update.`,
+        `${APP_DISPLAY_NAME} update available`,
+        `Version ${info.version} is available. Open ${APP_DISPLAY_NAME} to update.`,
       );
       if (shown) notifiedVersion = info.version;
     }
@@ -141,6 +142,10 @@ function errorMessage(err: unknown): string {
   // bare "404", which can also be a missing zip mid-download).
   if (/latest-mac\.yml|Cannot parse releases feed|Unable to find latest version/i.test(msg)) {
     return "No update feed found on the latest release (missing latest-mac.yml). The release may still be building.";
+  }
+  // The feed repo has no published releases yet (a brand-new OpenTrade Nightly repo).
+  if (/releases\.atom/.test(msg) && /\b404\b/.test(msg)) {
+    return "No releases published yet.";
   }
   return msg;
 }
@@ -209,17 +214,40 @@ export function setUpdateChannel(setting: UpdateChannel): void {
   // Idempotent; makes this safe to call before `initAutoUpdate` (the host-failed boot
   // path does), so a check never runs with electron-updater's auto-download defaults.
   wireEvents();
-  const allow = setting === "beta";
   if (!booted) {
     booted = true;
-    autoUpdater.allowPrerelease = allow;
+    applyChannel(setting);
     checkForUpdatesNow();
     setInterval(() => checkForUpdatesNow(), CHECK_INTERVAL_MS);
     return;
   }
-  if (autoUpdater.allowPrerelease === allow) return;
-  autoUpdater.allowPrerelease = allow;
-  checkForUpdatesNow();
+  if (applyChannel(setting)) checkForUpdatesNow();
+}
+
+/**
+ * Point electron-updater at the setting's channel; returns whether anything changed.
+ *
+ * OpenTrade Nightly has no beta toggle: its feed (a generic provider on the rolling
+ * `0.0.0-nightly` release, channel `opentrade-nightly`) comes from app-update.yml and
+ * is left alone here.
+ *
+ * On stable, beta also pins the channel to `beta`. Without it, electron-updater's
+ * GitHub provider takes the newest pre-release of ANY name when the running version is
+ * stable, which would include the rolling Nightly release; with it, releases whose tag
+ * carries another prerelease id (`0.0.0-nightly`) are skipped. Off → `latest` (only
+ * `/releases/latest` is consulted then). Setting `channel` also flips `allowDowngrade`
+ * on inside electron-updater, so it's reset — a beta build turning beta off must stay
+ * put until the next stable (above), not be offered the older stable.
+ */
+function applyChannel(setting: UpdateChannel): boolean {
+  if (IS_NIGHTLY) return false;
+  const beta = setting === "beta";
+  const channel = beta ? "beta" : "latest";
+  if (autoUpdater.allowPrerelease === beta && autoUpdater.channel === channel) return false;
+  autoUpdater.allowPrerelease = beta;
+  autoUpdater.channel = channel;
+  autoUpdater.allowDowngrade = false;
+  return true;
 }
 
 /**

@@ -12,7 +12,7 @@ files:
   - package.json
 # Native modules and the per-agent MCP server must live on the real filesystem,
 # not inside the asar archive:
-#  - agent-mcp.js is spawned by `claude` (a child process), not by Electron.
+#  - agent-mcp.js / kalshi-mcp.js are spawned by the agent CLI (a child process), not by Electron.
 #  - better-sqlite3 / node-pty ship `.node` binaries that dlopen at runtime; the
 #    externalized host bundle `require`s them and node-pty re-spawns out of asar.
 # (The bun symlinks for these are materialized into real dirs by
@@ -20,6 +20,11 @@ files:
 #  cannot follow symlinks into the asar.)
 asarUnpack:
   - out/main/agent-mcp.js
+  - out/main/kalshi-mcp.js
+  # Code shared between entries (the MCP runtime, the Kalshi tool table) is split into
+  # out/main/chunks/ by rollup; the unpacked MCP servers `require("./chunks/…")`, so the
+  # chunks must be unpacked beside them (asar redirects the host's own reads).
+  - out/main/chunks/**
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/node-pty/**"
   - "**/node_modules/koffi/**"

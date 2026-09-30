@@ -8,6 +8,6 @@
       "@shared/*": ["./src/shared/*"]
     }
   },
-  "include": ["src/main", "src/shared", "electron.vite.config.ts", "drizzle.config.ts"],
+  "include": ["src/main", "src/agent-mcp", "src/shared", "electron.vite.config.ts", "drizzle.config.ts"],
   "exclude": ["src/**/*.test.ts"]
 }

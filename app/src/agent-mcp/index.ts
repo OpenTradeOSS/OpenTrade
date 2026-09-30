@@ -6,47 +6,11 @@
 // closing and the host restarting. The tools are a thin HTTP shim over the host's
 // LocalApi `/schedules/*` routes.
 //
-// Intentionally dependency-free (node builtins only): this file is loaded in every
-// agent `claude` session (interactive PTYs and headless `-p` wake runs alike), and
-// being self-contained avoids asar/externalize resolution fragility in a packaged app.
-//
-// Secrets are NOT baked into `.mcp.json`; they arrive via the inherited spawn env
-// (claude passes its PTY env to the MCP child): OPENTRADE_PORT / OPENTRADE_TOKEN /
-// OPENTRADE_AGENT_ID.
+// Dependency-free and secret-free — see ./runtime.ts (shared with the `kalshi` server).
 
-import { readFileSync } from "node:fs";
-import { request as httpRequest } from "node:http";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
-const AGENT_ID = process.env.OPENTRADE_AGENT_ID;
-
-/**
- * Resolve the host endpoint. Claude inherits OPENTRADE_PORT/TOKEN from the PTY
- * env; codex spawns MCP children with a CLEANED env, so those are absent — fall
- * back to the host manifest (`$OPENTRADE_HOME/host.json`, the same discovery
- * contract the launcher uses; port + token are stable). Read per call so a host
- * restart's fresh manifest is picked up.
- */
-function backendEndpoint(): { port: string; token: string } | null {
-  const port = process.env.OPENTRADE_PORT;
-  const token = process.env.OPENTRADE_TOKEN;
-  if (port && token) return { port, token };
-  const home = process.env.OPENTRADE_HOME ?? join(homedir(), ".opentrade");
-  try {
-    const m = JSON.parse(readFileSync(join(home, "host.json"), "utf8")) as {
-      faucetPort?: number;
-      token?: string;
-    };
-    if (m.faucetPort && m.token) return { port: String(m.faucetPort), token: m.token };
-  } catch {
-    // no manifest → host not running
-  }
-  return null;
-}
+import { callHost, describeError, send, serveStdio, type ToolDef } from "./runtime";
 
 const SERVER_INFO = { name: "opentrade", version: "0.1.0" };
-const DEFAULT_PROTOCOL = "2024-11-05";
 
 // Channel mode is always on (it's the default — the server always advertises the
 // claude/channel capability and runs the /wake-stream poll loop). Claude Code only
@@ -58,70 +22,12 @@ const CHANNEL_INSTRUCTIONS =
   "They are one-way: read the body as your next task, act on it (read STRATEGY.md first), " +
   "and continue. No reply to the channel is expected.";
 
-interface JsonRpcMessage {
-  jsonrpc?: string;
-  id?: number | string | null;
-  method?: string;
-  params?: Record<string, unknown>;
-  result?: unknown;
-  error?: unknown;
-}
-
-/** Call the host LocalApi faucet (`/schedules/*`) with the agent's auth headers. */
-function callHost(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<{ status: number; json: unknown }> {
-  return new Promise((resolve, reject) => {
-    const endpoint = backendEndpoint();
-    if (!endpoint || !AGENT_ID) {
-      return reject(
-        new Error("OpenTrade backend unreachable (no env endpoint and no host manifest)"),
-      );
-    }
-    const { port: PORT, token: TOKEN } = endpoint;
-    const payload = body == null ? undefined : Buffer.from(JSON.stringify(body), "utf8");
-    const req = httpRequest(
-      {
-        host: "127.0.0.1",
-        port: Number(PORT),
-        path,
-        method,
-        headers: {
-          "content-type": "application/json",
-          "x-opentrade-token": TOKEN,
-          "x-opentrade-agent": AGENT_ID,
-          ...(payload ? { "content-length": String(payload.length) } : {}),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c) => chunks.push(c as Buffer));
-        res.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          let json: unknown = null;
-          try {
-            json = text ? JSON.parse(text) : null;
-          } catch {
-            json = text;
-          }
-          resolve({ status: res.statusCode ?? 0, json });
-        });
-      },
-    );
-    req.on("error", reject);
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
-
-interface ToolDef {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  run: (args: Record<string, unknown>) => Promise<string>;
-}
+// The Key Vault's API keys reach the agent's shell as env vars; tell the agent which
+// exist (names only — the values stay in the env). Set by the host at spawn.
+const KEY_NAMES = (process.env.OPENTRADE_KEYS ?? "").split(",").filter(Boolean);
+const KEYS_INSTRUCTIONS = KEY_NAMES.length
+  ? ` API keys from the user's Key Vault are available in your shell as environment variables: ${KEY_NAMES.join(", ")}. Use them in scripts and requests (e.g. "$${KEY_NAMES[0]}"); never print, log, or write their values anywhere.`
+  : "";
 
 function obj(
   properties: Record<string, unknown>,
@@ -252,89 +158,6 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
-function describeError(json: unknown): string {
-  if (json && typeof json === "object" && "error" in json)
-    return String((json as { error: unknown }).error);
-  return typeof json === "string" ? json : JSON.stringify(json);
-}
-
-const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
-
-function send(msg: JsonRpcMessage): void {
-  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...msg })}\n`);
-}
-
-function reply(id: JsonRpcMessage["id"], result: unknown): void {
-  send({ id, result });
-}
-
-function replyError(id: JsonRpcMessage["id"], code: number, message: string): void {
-  send({ id, error: { code, message } });
-}
-
-async function handle(msg: JsonRpcMessage): Promise<void> {
-  const { id, method, params } = msg;
-  // Notifications (no id) need no response.
-  const isNotification = id === undefined || id === null;
-
-  switch (method) {
-    case "initialize": {
-      const clientProtocol = (params?.protocolVersion as string) || DEFAULT_PROTOCOL;
-      reply(id, {
-        protocolVersion: clientProtocol,
-        // The presence of `experimental["claude/channel"]` is what makes Claude Code
-        // register a channel listener for this server (research preview).
-        capabilities: { tools: {}, experimental: { "claude/channel": {} } },
-        serverInfo: SERVER_INFO,
-        instructions: CHANNEL_INSTRUCTIONS,
-      });
-      return;
-    }
-    case "notifications/initialized":
-      // The session is live — start the warm-wake poll loop. Claude only: under a
-      // codex harness there is no channel to push into (wakes arrive via the agent's
-      // app-server, and a served poll here would silently EAT the wake), so the
-      // poller stays off. The env flag rides the codex config's MCP entry.
-      if (process.env.OPENTRADE_HARNESS !== "codex") startWakePoller();
-      return;
-    case "notifications/cancelled":
-      return; // no-op notification
-    case "ping":
-      if (!isNotification) reply(id, {});
-      return;
-    case "tools/list":
-      reply(id, {
-        tools: TOOLS.map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        })),
-      });
-      return;
-    case "tools/call": {
-      const name = String(params?.name ?? "");
-      const tool = TOOL_BY_NAME.get(name);
-      if (!tool) return replyError(id, -32602, `unknown tool: ${name}`);
-      const args = (params?.arguments as Record<string, unknown>) ?? {};
-      try {
-        const text = await tool.run(args);
-        reply(id, { content: [{ type: "text", text }] });
-      } catch (err) {
-        reply(id, {
-          content: [
-            { type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` },
-          ],
-          isError: true,
-        });
-      }
-      return;
-    }
-    default:
-      if (!isNotification) replyError(id, -32601, `method not found: ${method}`);
-      return;
-  }
-}
-
 // ---- channel warm-wake delivery (channel mode only) ----
 
 /** Inject a scheduled wake into the live session as a `<channel source="opentrade">`. */
@@ -376,23 +199,18 @@ function startWakePoller(): void {
 // Electron/node executable (packaging: see docs/PACKAGING.md "Process naming").
 process.title = "OpenTrade Agent MCP";
 
-// ---- stdio transport: newline-delimited JSON-RPC ----
-let buffer = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk: string) => {
-  buffer += chunk;
-  let nl = buffer.indexOf("\n");
-  while (nl >= 0) {
-    const line = buffer.slice(0, nl).trim();
-    buffer = buffer.slice(nl + 1);
-    if (line) {
-      try {
-        void handle(JSON.parse(line) as JsonRpcMessage);
-      } catch {
-        // ignore unparseable lines
-      }
-    }
-    nl = buffer.indexOf("\n");
-  }
+serveStdio({
+  serverInfo: SERVER_INFO,
+  instructions: CHANNEL_INSTRUCTIONS + KEYS_INSTRUCTIONS,
+  // The presence of `experimental["claude/channel"]` is what makes Claude Code
+  // register a channel listener for this server (research preview).
+  capabilities: { tools: {}, experimental: { "claude/channel": {} } },
+  tools: TOOLS,
+  // The session is live — start the warm-wake poll loop. Claude only: under a
+  // codex harness there is no channel to push into (wakes arrive via the agent's
+  // app-server, and a served poll here would silently EAT the wake), so the
+  // poller stays off. The env flag rides the codex config's MCP entry.
+  onInitialized: () => {
+    if (process.env.OPENTRADE_HARNESS !== "codex") startWakePoller();
+  },
 });
-process.stdin.on("end", () => process.exit(0));

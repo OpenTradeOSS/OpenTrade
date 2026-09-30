@@ -1,4 +1,5 @@
 import type { Agent, AgentStatus } from "@shared/agent";
+import { APP_DISPLAY_NAME } from "@shared/app-identity";
 import type { RecentNotification } from "@shared/notify";
 import { Menu, type MenuItemConstructorOptions, nativeImage, Tray } from "electron";
 
@@ -96,7 +97,7 @@ export class AppTray {
   show(): void {
     if (this.tray) return;
     this.tray = new Tray(trayIcon());
-    this.tray.setToolTip("OpenTrade");
+    this.tray.setToolTip(APP_DISPLAY_NAME);
     this.render();
     // Rows carry relative times ("2h ago"), which would otherwise freeze at whatever
     // the last data push rendered. macOS can't update an open menu, but every reopen
@@ -147,7 +148,7 @@ export class AppTray {
     // Opening the app leads: it's the action people reach for, so it sits under the
     // cursor the moment the menu drops rather than at the far end of the list.
     const items: MenuItemConstructorOptions[] = [
-      { label: "Open OpenTrade", click: () => this.actions.openWindow() },
+      { label: `Open ${APP_DISPLAY_NAME}`, click: () => this.actions.openWindow() },
     ];
 
     if (this.agents.length > 0) {
@@ -196,8 +197,8 @@ export class AppTray {
       { type: "separator" },
       // Quit = the launcher only (agents keep running headless, the Docker Desktop
       // model); Completely = the backend host too — the full process tree.
-      { label: "Quit OpenTrade", click: () => this.actions.quit() },
-      { label: "Quit OpenTrade Completely", click: () => this.actions.quitCompletely() },
+      { label: `Quit ${APP_DISPLAY_NAME}`, click: () => this.actions.quit() },
+      { label: `Quit ${APP_DISPLAY_NAME} Completely`, click: () => this.actions.quitCompletely() },
     );
     return items;
   }

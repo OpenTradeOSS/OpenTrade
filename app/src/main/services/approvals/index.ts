@@ -372,6 +372,30 @@ export class ApprovalService {
     return null;
   }
 
+  /**
+   * Every Kalshi order an agent placed through the gate: order id → agent id. Kalshi
+   * shares the user's main account (unlike Robinhood's agentic sub-account), so this is
+   * how the Portfolio panel tells the agents' positions apart from the user's own.
+   */
+  kalshiAgentOrders(): Map<string, string> {
+    const rows = this.db
+      .select()
+      .from(approvalsTable)
+      .where(
+        and(
+          eq(approvalsTable.toolName, "mcp__kalshi__place_order"),
+          eq(approvalsTable.status, "approved"),
+        ),
+      )
+      .all();
+    const out = new Map<string, string>();
+    for (const row of rows) {
+      const orderId = safeJson<OrderOutcome>(row.outcome)?.orderId;
+      if (orderId) out.set(orderId, row.agentId);
+    }
+    return out;
+  }
+
   /** On boot, no hook is still long-polling — expire orphaned pending rows. */
   expireOrphansOnBoot(): void {
     const orphans = this.db

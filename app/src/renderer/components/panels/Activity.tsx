@@ -1,10 +1,12 @@
 import type { AuditEntry, ParsedOrder } from "@shared/approval";
 import type { OrderStatus } from "@shared/broker";
+import { FEATURES } from "@shared/feature-flags";
 import { legsLabel, STANDARD_MULTIPLIER } from "@shared/options";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useActivity } from "../../hooks/useActivity";
 import { useAgenticOrders, useLedgerReady, useRefreshOrders } from "../../hooks/useBroker";
+import { useKalshiOrders } from "../../hooks/useKalshi";
 import {
   type ActivityGroup,
   fromRhState,
@@ -18,6 +20,7 @@ import { useUIStore } from "../../stores/ui";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PendingApprovals } from "./PendingApprovals";
+import { VenueSwitch } from "./VenueSwitch";
 
 export function Activity() {
   const selectedId = useUIStore((s) => s.selectedAgentId);
@@ -31,7 +34,12 @@ export function Activity() {
   // both the approvalId (the group key) and the broker orderId, so we read the
   // approvalId → orderId link straight off the feed: approvalId → orderId → live
   // OrderStatus.
-  const orders = useAgenticOrders();
+  const rhOrders = useAgenticOrders();
+  const kalshiOrders = useKalshiOrders();
+  const venue = useUIStore((s) => s.venue);
+  // One join map across venues: Kalshi orders arrive in the same OrderStatus shape, so
+  // an agent's Kalshi order gets its live fill state exactly like a Robinhood one.
+  const orders = useMemo(() => new Map([...rhOrders, ...kalshiOrders]), [rhOrders, kalshiOrders]);
   const ledgerReady = useLedgerReady();
   const orderIdByApproval = useMemo(() => {
     const map = new Map<string, string>();
@@ -50,10 +58,19 @@ export function Activity() {
   // account. An order is "external" — not initiated here — when no approval claims
   // its id; those render as greyed, unexpandable rows.
   const claimed = useMemo(() => new Set(orderIdByApproval.values()), [orderIdByApproval]);
-  const rows: Row[] = groups.map((g) => ({ kind: "group", at: g.latest.at, group: g }));
+  const rows: Row[] = groups
+    .filter((g) => venue === "all" || groupVenue(g) === venue)
+    .map((g) => ({ kind: "group", at: g.latest.at, group: g }));
   if (scope === "all") {
-    for (const o of orders.values()) {
-      if (!claimed.has(o.id)) rows.push({ kind: "external", at: orderAt(o), status: o });
+    const external: [Map<string, OrderStatus>, "robinhood" | "kalshi"][] = [
+      [rhOrders, "robinhood"],
+      [kalshiOrders, "kalshi"],
+    ];
+    for (const [map, v] of external) {
+      if (venue !== "all" && venue !== v) continue;
+      for (const o of map.values()) {
+        if (!claimed.has(o.id)) rows.push({ kind: "external", at: orderAt(o), status: o });
+      }
     }
   }
   rows.sort((a, b) => b.at - a.at);
@@ -69,6 +86,12 @@ export function Activity() {
     <div className="flex flex-col p-4">
       {/* The approval gate's pending queue (renders nothing when empty). */}
       <PendingApprovals />
+
+      {FEATURES.venues && (
+        <div className="mb-3">
+          <VenueSwitch />
+        </div>
+      )}
 
       {/* History header: title on the left, scope toggle + refresh on the right. */}
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -125,6 +148,17 @@ export function Activity() {
       )}
     </div>
   );
+}
+
+/** Which venue an order group belongs to — Kalshi orders come from the `kalshi` MCP. */
+function groupVenue(group: ActivityGroup): "robinhood" | "kalshi" {
+  return group.entries.some((e) =>
+    String((e.payload as { toolName?: unknown } | null)?.toolName ?? "").startsWith(
+      "mcp__kalshi__",
+    ),
+  )
+    ? "kalshi"
+    : "robinhood";
 }
 
 /** Small uppercase section heading. */

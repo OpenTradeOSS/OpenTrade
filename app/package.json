@@ -15,8 +15,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "prepackage": "node scripts/copy-native-modules.mjs",
     "package": "bun run prepackage && electron-vite build && electron-builder --config electron-builder.yml",
+    "package:nightly": "bun run prepackage && OPENTRADE_CHANNEL=nightly electron-vite build && electron-builder --config electron-builder.nightly.yml",
     "package:signed": "set -a; [ -f ../.env ] && . ../.env; set +a; bun run package",
     "pack:dir": "bun run prepackage && electron-vite build && electron-builder --dir --config electron-builder.yml",
+    "pack:dir:nightly": "bun run prepackage && OPENTRADE_CHANNEL=nightly electron-vite build && electron-builder --dir --config electron-builder.nightly.yml",
     "rebuild": "electron-builder install-app-deps",
     "make-icon": "node scripts/make-icon.mjs",
     "db:generate": "drizzle-kit generate"
