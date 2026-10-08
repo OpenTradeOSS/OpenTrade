@@ -31,6 +31,10 @@ function ApprovalCard({ a, onDone }: { a: Approval; onDone: () => void }) {
   const left = useSecondsLeft(a);
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const summary = a.parsed?.summary ?? a.toolName;
+  // "BUY 10 AAPL @ $215.00 limit — est. $2,150.00" → headline without the estimate,
+  // which is shown on its own line below.
+  const headline = summary.split(" — ")[0];
+  const side = a.parsed?.side?.toUpperCase() ?? null;
 
   const decide = async (approve: boolean) => {
     if (approve && !(await confirmWithBiometrics(summary))) return;
@@ -56,7 +60,27 @@ function ApprovalCard({ a, onDone }: { a: Approval; onDone: () => void }) {
           {left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left` : "Expiring"}
         </Text>
       </View>
-      <Text style={{ color: colors.text, fontSize: 18, fontWeight: "600", marginBottom: 6 }}>{summary}</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        {side && (
+          <Text
+            style={{
+              color: side === "SELL" ? colors.danger : colors.accent,
+              backgroundColor: side === "SELL" ? "#f8717122" : "#4ade8022",
+              fontSize: 12,
+              fontWeight: "700",
+              paddingHorizontal: 8,
+              paddingVertical: 2,
+              borderRadius: 6,
+              overflow: "hidden",
+            }}
+          >
+            {side}
+          </Text>
+        )}
+        <Text style={{ color: colors.text, fontSize: 18, fontWeight: "600", flexShrink: 1 }}>
+          {side ? headline.replace(/^(BUY|SELL)\s+/i, "") : headline}
+        </Text>
+      </View>
       {a.parsed && (
         <View style={{ gap: 2, marginBottom: 14 }}>
           {a.parsed.orderType && <Muted>Type: {a.parsed.orderType}</Muted>}

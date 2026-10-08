@@ -1,3 +1,4 @@
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
@@ -14,12 +15,14 @@ import { colors } from "./src/ui";
 
 type Tab = "approvals" | "agents" | "portfolio" | "activity" | "account";
 
-const TABS: Array<{ id: Tab; label: string; glyph: string }> = [
-  { id: "approvals", label: "Approvals", glyph: "✓" },
-  { id: "agents", label: "Agents", glyph: "◎" },
-  { id: "portfolio", label: "Portfolio", glyph: "◔" },
-  { id: "activity", label: "Activity", glyph: "≡" },
-  { id: "account", label: "Account", glyph: "◯" },
+type IconName = keyof typeof Ionicons.glyphMap;
+
+const TABS: Array<{ id: Tab; label: string; icon: IconName }> = [
+  { id: "approvals", label: "Approvals", icon: "checkmark-circle-outline" },
+  { id: "agents", label: "Agents", icon: "hardware-chip-outline" },
+  { id: "portfolio", label: "Portfolio", icon: "pie-chart-outline" },
+  { id: "activity", label: "Activity", icon: "pulse-outline" },
+  { id: "account", label: "Account", icon: "person-circle-outline" },
 ];
 
 const TITLES: Record<Tab, string> = {
@@ -94,7 +97,7 @@ function Main({ onSignedOut }: { onSignedOut: () => void }) {
                 style={{ flex: 1, alignItems: "center", paddingVertical: 8, gap: 2 }}
               >
                 <View>
-                  <Text style={{ color: active ? colors.accent : colors.muted, fontSize: 18 }}>{t.glyph}</Text>
+                  <Ionicons name={t.icon} size={24} color={active ? colors.accent : colors.muted} />
                   {t.id === "approvals" && <PendingBadge />}
                 </View>
                 <Text style={{ color: active ? colors.text : colors.muted, fontSize: 11 }}>{t.label}</Text>
