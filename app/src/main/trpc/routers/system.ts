@@ -1,5 +1,6 @@
 import { observable } from "@trpc/server/observable";
 import { OPENTRADE_HOME } from "../../db/client";
+import { IS_HOSTED } from "../../host/hosted";
 import { readClaudeRetention } from "../../services/claude-config";
 import { bus } from "../../services/event-bus";
 import { publicProcedure, router } from "../trpc";
@@ -13,7 +14,16 @@ export const systemRouter = router({
     version: process.env.OPENTRADE_VERSION ?? "dev",
     platform: process.platform,
     home: OPENTRADE_HOME,
+    hosted: IS_HOSTED,
   })),
+
+  /** Hosted only: URLs the host would have opened in a browser on the desktop. */
+  onOpenUrl: publicProcedure.subscription(() =>
+    observable<{ url: string; purpose: string }>((emit) => {
+      const off = bus.onEvent("system:open-url", (p) => emit.next(p));
+      return () => off();
+    }),
+  ),
 
   /** Claude Code's transcript retention (`cleanupPeriodDays`, default 30). Agents
    *  resume via those transcripts, so this is effectively how long an idle agent keeps

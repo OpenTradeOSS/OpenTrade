@@ -1,0 +1,9 @@
+# Build contexts for cloud/sandbox and cloud/gateway (both built from the repo root).
+**/node_modules
+.git
+website
+app/release
+app/src
+app/out/**/*.map
+**/*.db
+**/.env*

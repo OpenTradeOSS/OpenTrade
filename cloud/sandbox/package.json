@@ -1,0 +1,18 @@
+{
+  "name": "@opentrade/sandbox-runtime",
+  "private": true,
+  "description": "Runtime dependencies the host bundle (app/out/main) leaves external, installed for Linux in the sandbox image. Versions mirror app/package.json.",
+  "license": "Elastic-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.28.0",
+    "@trpc/server": "11.16.0",
+    "better-sqlite3": "12.6.2",
+    "croner": "9.0.0",
+    "drizzle-orm": "0.45.2",
+    "koffi": "3.3.0",
+    "nanoid": "5.1.6",
+    "node-pty": "1.1.0",
+    "superjson": "2.2.6",
+    "zod": "4.3.6"
+  }
+}

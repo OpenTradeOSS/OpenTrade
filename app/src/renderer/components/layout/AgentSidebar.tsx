@@ -10,6 +10,7 @@ import { useConnectionStore } from "../../stores/connection";
 import { useUIStore } from "../../stores/ui";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Separator } from "../ui/separator";
+import { HostedLinks } from "./HostedLinks";
 import { StatusDot } from "./StatusDot";
 import { UpdateButton } from "./UpdateButton";
 
@@ -161,6 +162,7 @@ export function AgentSidebar() {
           </div>
         )}
         <UpdateButton />
+        <HostedLinks />
         <button
           type="button"
           onClick={() => setView("settings")}

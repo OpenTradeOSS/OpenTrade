@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -39,4 +39,30 @@ export function readClaudeRetention(dir: string = claudeConfigDir()): ClaudeRete
     // no file / unreadable / bad JSON → the Claude Code default applies
   }
   return { days: CLAUDE_DEFAULT_RETENTION_DAYS, configured: false, settingsPath };
+}
+
+/** Claude Code's global state file: `$CLAUDE_CONFIG_DIR/.claude.json` or `~/.claude.json`. */
+function claudeStatePath(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.CLAUDE_CONFIG_DIR?.trim();
+  return override ? join(override, ".claude.json") : join(homedir(), ".claude.json");
+}
+
+/**
+ * Mark an agent's folder as trusted in Claude Code's state, so its session doesn't open
+ * on the "do you trust this folder?" prompt. Used only for OpenTrade Cloud, where the
+ * folder was created by OpenTrade at the user's request and an unattended agent (or a
+ * phone) shouldn't have to answer it; on the desktop the user answers it once.
+ */
+export function trustClaudeProject(dir: string, path: string = claudeStatePath()): void {
+  let state: Record<string, unknown> = {};
+  try {
+    state = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    // missing or unreadable: start fresh
+  }
+  const projects = (state.projects ?? {}) as Record<string, Record<string, unknown>>;
+  if (projects[dir]?.hasTrustDialogAccepted === true) return;
+  projects[dir] = { ...projects[dir], hasTrustDialogAccepted: true };
+  state.projects = projects;
+  writeFileSync(path, JSON.stringify(state, null, 2), { mode: 0o600 });
 }

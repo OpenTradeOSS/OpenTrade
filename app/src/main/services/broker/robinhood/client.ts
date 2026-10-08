@@ -17,6 +17,7 @@ import type {
   Quote,
 } from "@shared/broker";
 import type { Db } from "../../../db/client";
+import { IS_HOSTED } from "../../../host/hosted";
 import { type BrokerAdapter, ConnectSuperseded, type McpServerConfig } from "../adapter";
 import {
   mapAccounts,
@@ -72,6 +73,17 @@ const OAUTH_ERRORS = new Set([
 /** `access_denied` → `OAUTH_ACCESS_DENIED`; anything off the RFC list → `OAUTH_UNKNOWN`. */
 export function oauthErrorCode(error: string | null | undefined): string {
   return error && OAUTH_ERRORS.has(error) ? `OAUTH_${error.toUpperCase()}` : "OAUTH_UNKNOWN";
+}
+
+/**
+ * The redirect URL for a loopback bound on `port`. Hosted (OpenTrade Cloud), the
+ * browser can't reach the sandbox's loopback, so the provider redirects to the gateway,
+ * which relays the callback to this port through the sandbox edge (`/oauth/relay`).
+ */
+export function loopbackRedirectUrl(port: number): string {
+  const publicUrl = process.env.OPENTRADE_PUBLIC_URL;
+  if (IS_HOSTED && publicUrl) return `${publicUrl}/oauth/relay/${port}/callback`;
+  return `http://${LOOPBACK_HOST}:${port}/callback`;
 }
 
 /** A bound loopback redirect listener for one consent flow. */
@@ -158,7 +170,7 @@ export async function openLoopback(
     () => close(new OAuthFlowError("OAUTH_TIMEOUT", "consent flow timed out")),
     opts.timeoutMs ?? CONSENT_TIMEOUT_MS,
   );
-  return { redirectUrl: `http://${LOOPBACK_HOST}:${port}/callback`, code, close };
+  return { redirectUrl: loopbackRedirectUrl(port), code, close };
 }
 
 /**

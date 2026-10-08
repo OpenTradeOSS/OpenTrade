@@ -194,7 +194,7 @@ function NewAgentForm() {
           onChange={(e) => setClaudeMd(e.target.value)}
           spellCheck={false}
           placeholder="Write this agent's instructions — its strategy, principles, and journaling. Leave blank for a clean slate."
-          className="h-[19rem] resize-none border-transparent bg-transparent px-3.5 py-3 font-mono text-[12px] leading-relaxed shadow-none placeholder:text-muted-foreground/40 focus-visible:border-transparent"
+          className="h-[19rem] max-h-[40vh] resize-none border-transparent bg-transparent px-3.5 py-3 font-mono text-[12px] leading-relaxed shadow-none placeholder:text-muted-foreground/40 focus-visible:border-transparent"
         />
         <div className="flex items-center justify-end px-2.5 pb-2.5">
           <Button
@@ -210,8 +210,8 @@ function NewAgentForm() {
       </div>
 
       {/* Footer: environment + approval + template pickers, create hint */}
-      <div className="flex items-center justify-between gap-2 px-0.5">
-        <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <PickerPill
             icon={
               environment === "local" ? (

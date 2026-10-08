@@ -22,10 +22,11 @@ export interface TerminalTransport {
  * opens whatever `url` it's given (ws:// local daemon today, wss:// cloud host
  * later) and never inspects host/port/token — the auth scheme can change
  * server-side without touching this code. Reconnect/liveness policy lives in
- * the session controller, not here.
+ * the session controller, not here. A hosted (OpenTrade Cloud) host returns a
+ * same-origin path, resolved against the page's origin.
  */
 export function connectTerminalWs(url: string, handlers: TerminalWsHandlers): TerminalTransport {
-  const ws = new WebSocket(url);
+  const ws = new WebSocket(resolveWsUrl(url));
   ws.binaryType = "arraybuffer";
 
   ws.onmessage = (ev) => {
@@ -66,4 +67,10 @@ export function connectTerminalWs(url: string, handlers: TerminalWsHandlers): Te
       }
     },
   };
+}
+
+export function resolveWsUrl(url: string): string {
+  if (!url.startsWith("/")) return url;
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${window.location.host}${url}`;
 }

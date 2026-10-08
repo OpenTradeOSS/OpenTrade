@@ -48,6 +48,9 @@ import { VaultService } from "../services/vault";
 import { HyperliquidService } from "../services/venues/hyperliquid";
 import { KalshiService } from "../services/venues/kalshi";
 import type { Context } from "../trpc/trpc";
+import { HostedEdge } from "./edge";
+import { HOSTED_PRIVATE_ENV, hostedConfig, IS_HOSTED } from "./hosted";
+import { startHostedNotify } from "./hosted-notify";
 import { hostLog } from "./log";
 import { clearManifest, writeManifest } from "./manifest";
 import { HostTrpcServer } from "./trpc-server";
@@ -59,6 +62,11 @@ import { HostTrpcServer } from "./trpc-server";
  * abandoned (both end in `OAUTH_TIMEOUT`).
  */
 function openExternal(url: string): void {
+  // Hosted: no browser in the sandbox; the web app shows the link to the user instead.
+  if (IS_HOSTED) {
+    bus.emitEvent("system:open-url", { url, purpose: "broker" });
+    return;
+  }
   const cmd =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   execFile(cmd, [url], (err) => {
@@ -73,12 +81,21 @@ async function main() {
   // ELECTRON_RUN_AS_NODE child of the app binary). See docs/PACKAGING.md.
   process.title = `${APP_DISPLAY_NAME} Host`;
   hostLog.info(`host starting (pid ${process.pid}) home=${OPENTRADE_HOME}`);
+  // Hosted: read the sandbox's private config, then drop it from the env every agent
+  // inherits (buildAgentEnv copies process.env).
+  const hosted = IS_HOSTED ? hostedConfig() : null;
+  for (const key of HOSTED_PRIVATE_ENV) delete process.env[key];
 
   const db = createDb(hostLog);
   const registry = new AgentRegistry(db);
   registry.resetStatusesOnBoot();
 
   const settings = new SettingsService(db);
+  // Hosted agents have no subscription login: model access is the per-sandbox key the
+  // gateway meters, so background runs must keep it rather than strip it.
+  if (hosted && !settings.get().backgroundAllowApiKey) {
+    settings.update({ backgroundAllowApiKey: true });
+  }
   // Durable Recent ring buffer for the tray (§12.6). Subscribed HERE, before anything
   // that can emit `notify` — the scheduler's boot catch-up sweep (scheduler.start()
   // below) fires wake notifications synchronously, and the broker auto-connect can too.
@@ -251,6 +268,20 @@ async function main() {
   });
   hostLog.info(`host ready: faucet=${localApi.port} trpc=${trpc.port}`);
 
+  const edge = hosted
+    ? new HostedEdge(
+        () => ({ trpcPort: trpc.port, terminalPort: terminal.wsPort, token }),
+        hosted.edgeSecret,
+      )
+    : null;
+  if (edge && hosted) {
+    await edge.listen(hosted.edgePort);
+    hostLog.info(`hosted edge listening on :${hosted.edgePort}`);
+    if (hosted.gatewayUrl && hosted.sandboxKey) {
+      startHostedNotify(hosted.gatewayUrl, hosted.sandboxKey);
+    }
+  }
+
   // Telemetry lifecycle: the host is up. `app_updated` fires once per version
   // transition (the reliable "an update actually landed" signal for the detached
   // host), tracked via the persisted `last_run_version`.
@@ -289,6 +320,7 @@ async function main() {
     codexManager.stopAll();
     terminal.stop();
     localApi.stop();
+    edge?.close();
     trpc.close();
     // Flush any queued telemetry before exiting (bounded so we can't hang on quit).
     void analytics.shutdown(1500).finally(() => {

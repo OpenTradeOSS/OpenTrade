@@ -1,0 +1,65 @@
+{
+  "expo": {
+    "name": "OpenTrade",
+    "slug": "opentrade",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "bot.opentrade.app",
+      "appleTeamId": "3C4383262W",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "OpenTrade uses Face ID to confirm before an agent's order is approved.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "bot.opentrade.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#05060a",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "permissions": [
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "color": "#4ade80"
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "OpenTrade uses Face ID to confirm before an agent's order is approved."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "imageWidth": 120,
+          "backgroundColor": "#05060a"
+        }
+      ]
+    ],
+    "scheme": "opentrade",
+    "backgroundColor": "#05060a",
+    "extra": {
+      "eas": {
+        "projectId": "aaf18ba9-8a35-40e6-b586-bfd6644a3a5a"
+      }
+    },
+    "owner": "birud"
+  }
+}

@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { HostedOpenUrl } from "./components/layout/HostedLinks";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { installRendererErrorReporter } from "./lib/error-reporter";
 import { trpc, trpcClient } from "./lib/trpc";
@@ -19,6 +20,7 @@ function Root() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <App />
+          <HostedOpenUrl />
         </TooltipProvider>
       </QueryClientProvider>
     </trpc.Provider>

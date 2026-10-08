@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { OPENTRADE_HOME } from "../../db/client";
+import { IS_HOSTED } from "../../host/hosted";
 import { integrationEnv } from "../integrations";
 
 /**
@@ -61,6 +62,9 @@ export function buildAgentEnv(
   base.COLORTERM = "truecolor";
   base.OPENTRADE_AGENT_ID = agentId;
   base.OPENTRADE_HOME = OPENTRADE_HOME;
+  // OpenTrade Cloud: tag every model request with the agent, so the gateway's metering
+  // proxy can attribute cost per agent (Claude Code sends ANTHROPIC_CUSTOM_HEADERS).
+  if (IS_HOSTED) base.ANTHROPIC_CUSTOM_HEADERS = `x-opentrade-agent: ${agentId}`;
 
   return { ...base, ...integrationEnv(), ...extra };
 }

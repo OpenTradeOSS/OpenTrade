@@ -1,0 +1,27 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "simulator": {
+      "ios": {
+        "simulator": true,
+        "buildConfiguration": "Release"
+      },
+      "env": {
+        "EXPO_PUBLIC_GATEWAY_URL": "https://opentrade-gateway.fly.dev"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "credentialsSource": "local",
+      "env": {
+        "EXPO_PUBLIC_GATEWAY_URL": "https://opentrade-gateway.fly.dev"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
