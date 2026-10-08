@@ -1,6 +1,6 @@
-# App Store listing: OpenTrade (bot.opentrade.app)
+# App Store listing: OpenTrade (ai.exla.opentrade.mobile, Exla Corp)
 
-**Name:** OpenTrade
+**Name:** OpenTrade Agents
 **Subtitle (30):** Approve your trading agents
 **Category:** Finance (secondary: Productivity)
 **Age rating:** 17+ (unrestricted web access: no; gambling: no; simulated gambling: no; the

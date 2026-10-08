@@ -8,8 +8,8 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "bot.opentrade.app",
-      "appleTeamId": "3C4383262W",
+      "bundleIdentifier": "ai.exla.opentrade.mobile",
+      "appleTeamId": "P76SY8RFGL",
       "config": {
         "usesNonExemptEncryption": false
       },
@@ -19,7 +19,7 @@
       }
     },
     "android": {
-      "package": "bot.opentrade.app",
+      "package": "ai.exla.opentrade.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#05060a",
         "foregroundImage": "./assets/android-icon-foreground.png"

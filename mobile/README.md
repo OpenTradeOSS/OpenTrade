@@ -13,7 +13,7 @@ npx expo start                     # dev
 
 ## Release (EAS)
 
-Bundle ID `bot.opentrade.app`, team `3C4383262W`. Builds run on EAS
+Bundle ID `ai.exla.opentrade.mobile`, team Exla Corp (`P76SY8RFGL`). Builds run on EAS
 (`@birud/opentrade`) with local credentials: an App Store distribution certificate and
 profile created through the App Store Connect API, referenced by the gitignored
 `credentials.json`.
