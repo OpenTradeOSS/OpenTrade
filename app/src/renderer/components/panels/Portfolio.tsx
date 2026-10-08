@@ -1,4 +1,5 @@
 import type { CryptoPosition, OptionPosition } from "@shared/broker";
+import { FEATURES } from "@shared/feature-flags";
 import { contractLabel } from "@shared/options";
 import { ChevronRight, Loader2 } from "lucide-react";
 import { useState } from "react";
@@ -9,11 +10,48 @@ import { cn } from "../../lib/utils";
 import { type PositionsMetric, useUIStore } from "../../stores/ui";
 import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import {
+  HyperliquidHoldings,
+  HyperliquidPortfolioView,
+  useHyperliquidTotal,
+} from "./HyperliquidPortfolio";
+import { KalshiHoldings, KalshiPortfolioView, useKalshiTotal } from "./KalshiPortfolio";
+import { VenueSwitch } from "./VenueSwitch";
 
 /** Placeholder shown in place of a dollar amount when balances are hidden. */
-const MASK = "****";
+export const MASK = "****";
 
+/**
+ * The Portfolio tab: an All / Robinhood / Kalshi / Hyperliquid switch over the account views. "All"
+ * sums the venues into one total, then lists every venue's holdings.
+ */
 export function Portfolio() {
+  const venue = useUIStore((s) => s.venue);
+  // Multi-venue is experimental (`FEATURES.venues`, Nightly only): stable shows Robinhood.
+  if (!FEATURES.venues) return <RobinhoodPortfolio />;
+  return (
+    <div className="flex flex-col">
+      <div className="px-4 pt-3">
+        <VenueSwitch />
+      </div>
+      {venue === "all" ? (
+        <AllPortfolio />
+      ) : venue === "robinhood" ? (
+        <RobinhoodPortfolio />
+      ) : venue === "kalshi" ? (
+        <KalshiPortfolioView />
+      ) : (
+        <HyperliquidPortfolioView />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Robinhood's account view. `holdingsOnly` (the "All" view) drops the account header and
+ * the connect prompts, leaving just the Equities / Options / Crypto sections.
+ */
+function RobinhoodPortfolio({ holdingsOnly = false }: { holdingsOnly?: boolean }) {
   const status = useBrokerStatus();
   const connect = trpc.onboarding.connectBroker.useMutation();
   const disconnect = trpc.broker.disconnect.useMutation();
@@ -23,6 +61,8 @@ export function Portfolio() {
   const [equitiesOpen, setEquitiesOpen] = useState(true);
   const [optionsOpen, setOptionsOpen] = useState(true);
   const [cryptoOpen, setCryptoOpen] = useState(true);
+
+  if (holdingsOnly && status?.status !== "connected") return null;
 
   if (!status || status.status === "disconnected" || status.status === "error") {
     return (
@@ -71,24 +111,28 @@ export function Portfolio() {
   const cryptoPositions = data.cryptoPositions?.value ?? [];
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <div>
-        {/* Click the value to hide/show all dollar balances (masked as ****). */}
-        <button
-          type="button"
-          onClick={toggleBalances}
-          aria-label={balancesHidden ? "Show balances" : "Hide balances"}
-          className="cursor-pointer text-3xl font-semibold tabular-nums outline-none transition-opacity hover:opacity-70"
-        >
-          {balancesHidden ? MASK : usd(p?.equity)}
-        </button>
-        <DayChange change={p?.dayChange} fraction={p?.dayChangePct} hidden={balancesHidden} />
-      </div>
+    <div className={cn("flex flex-col gap-4", holdingsOnly ? "px-4" : "p-4")}>
+      {!holdingsOnly && (
+        <>
+          <div>
+            {/* Click the value to hide/show all dollar balances (masked as ****). */}
+            <button
+              type="button"
+              onClick={toggleBalances}
+              aria-label={balancesHidden ? "Show balances" : "Hide balances"}
+              className="cursor-pointer text-3xl font-semibold tabular-nums outline-none transition-opacity hover:opacity-70"
+            >
+              {balancesHidden ? MASK : usd(p?.equity)}
+            </button>
+            <DayChange change={p?.dayChange} fraction={p?.dayChangePct} hidden={balancesHidden} />
+          </div>
 
-      <div className="flex flex-col">
-        <Row label="Buying power" value={balancesHidden ? MASK : usd(p?.buyingPower)} />
-        <Row label="Cash" value={balancesHidden ? MASK : usd(p?.cash)} />
-      </div>
+          <div className="flex flex-col">
+            <Row label="Buying power" value={balancesHidden ? MASK : usd(p?.buyingPower)} />
+            <Row label="Cash" value={balancesHidden ? MASK : usd(p?.cash)} />
+          </div>
+        </>
+      )}
 
       <div>
         <SectionHeader
@@ -201,7 +245,7 @@ const METRIC_LABEL: Record<PositionsMetric, string> = {
  * column shows (P&L $ → % gain → market value), the same click-to-change family
  * as the account value's balance masking. One store field drives both tables.
  */
-function MetricHead() {
+export function MetricHead() {
   const metric = useUIStore((s) => s.positionsMetric);
   const cycle = useUIStore((s) => s.cyclePositionsMetric);
   return (
@@ -224,7 +268,7 @@ function MetricHead() {
  * % is "fraction of the premium kept/lost"). P&L and % color by sign; Value is
  * neutral and masks with the other balances.
  */
-function MetricCell({
+export function MetricCell({
   pnl,
   costBasis,
   value,
@@ -265,7 +309,7 @@ function MetricCell({
  * Collapsible section heading, in the Monitor tab's History style (13px, between the
  * Monitor's `text-xs` and `text-sm`): the label is the toggle, the chevron rotates open.
  */
-function SectionHeader({
+export function SectionHeader({
   label,
   open,
   onToggle,
@@ -373,11 +417,99 @@ function DayChange({
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+export function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between border-t border-border py-2 text-sm first:border-t-0">
       <span className="text-muted-foreground">{label}</span>
       <span className="tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * All venues: one combined total, a line per venue (click to drill in), then every
+ * connected venue's holdings.
+ */
+function AllPortfolio() {
+  const rh = useBrokerStatus();
+  const data = useBrokerData();
+  const kalshi = useKalshiTotal();
+  const hl = useHyperliquidTotal();
+  const setVenue = useUIStore((s) => s.setVenue);
+  const balancesHidden = useUIStore((s) => s.balancesHidden);
+  const toggleBalances = useUIStore((s) => s.toggleBalances);
+
+  const rhConnected = rh?.status === "connected";
+  const rhValue = rhConnected ? (data.portfolio?.value.equity ?? null) : null;
+  const parts = [
+    rhValue,
+    kalshi.connected ? kalshi.total : null,
+    hl.connected ? hl.total : null,
+  ].filter((v): v is number => v !== null);
+  const total = parts.length ? parts.reduce((a, b) => a + b, 0) : null;
+
+  const venueRow = (label: string, value: number | null, state: string, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center justify-between border-t border-border py-2 text-sm first:border-t-0 hover:text-foreground"
+    >
+      <span className="flex items-center gap-2 text-muted-foreground">
+        <span
+          className={cn(
+            "size-1.5 rounded-full",
+            state === "connected"
+              ? "bg-success"
+              : state === "error"
+                ? "bg-destructive"
+                : "bg-muted-foreground/50",
+          )}
+        />
+        {label}
+      </span>
+      <span className="tabular-nums">
+        {state === "connected" ? (
+          balancesHidden ? (
+            MASK
+          ) : (
+            usd(value)
+          )
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {state === "error" ? "Error" : "Not connected"}
+          </span>
+        )}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="flex flex-col gap-4 pb-4">
+      <div className="flex flex-col gap-4 px-4 pt-4">
+        <div>
+          <button
+            type="button"
+            onClick={toggleBalances}
+            aria-label={balancesHidden ? "Show balances" : "Hide balances"}
+            className="cursor-pointer text-3xl font-semibold tabular-nums outline-none transition-opacity hover:opacity-70"
+          >
+            {balancesHidden ? MASK : usd(total)}
+          </button>
+          <div className="mt-1 text-sm text-muted-foreground">Across all venues</div>
+        </div>
+        <div className="flex flex-col">
+          {venueRow("Robinhood", rhValue, rh?.status ?? "disconnected", () =>
+            setVenue("robinhood"),
+          )}
+          {venueRow("Kalshi · agent positions", kalshi.total, kalshi.state, () =>
+            setVenue("kalshi"),
+          )}
+          {venueRow("Hyperliquid", hl.total, hl.state, () => setVenue("hyperliquid"))}
+        </div>
+      </div>
+      <RobinhoodPortfolio holdingsOnly />
+      <KalshiHoldings />
+      <HyperliquidHoldings />
     </div>
   );
 }

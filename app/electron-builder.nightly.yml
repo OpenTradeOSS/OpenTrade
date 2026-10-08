@@ -1,0 +1,40 @@
+# OpenTrade Nightly — the same app built from `main` with OPENTRADE_CHANNEL=nightly
+# (see src/shared/app-identity.ts). Everything that makes it a SEPARATE application
+# lives here, so it installs and runs side by side with OpenTrade.app:
+#  - its own bundle id → its own macOS identity (Dock, notifications, code-sign
+#    requirement, so Squirrel can never swap one app for the other);
+#  - its own name + inverted icon (bun run make-icon -- --nightly);
+#  - its own update feed (below);
+#  - its own electron-updater cache dir (derived from the package name).
+# The data home (~/.opentrade-nightly) follows from the channel at runtime.
+extends: ./electron-builder.yml
+appId: ai.exla.opentrade.nightly
+productName: OpenTrade Nightly
+extraMetadata:
+  name: "@opentrade/app-nightly"
+  productName: OpenTrade Nightly
+mac:
+  icon: build/icon-nightly.icns
+  # No spaces in asset names: GitHub rewrites them, which would break the feed's URLs.
+  artifactName: OpenTrade-Nightly-${version}-${arch}-mac.${ext}
+dmg:
+  # Version-less, so .../releases/download/0.0.0-nightly/OpenTrade-Nightly-arm64.dmg is a
+  # permanent download link.
+  artifactName: OpenTrade-Nightly-${arch}.${ext}
+  title: OpenTrade Nightly ${version}
+# The feed is ONE rolling pre-release in the main repo, tag `0.0.0-nightly`, whose
+# assets release-nightly.yml replaces every night (Zed's `nightly/` folder, on GitHub).
+# The names are chosen so no stable install can ever be offered Nightly:
+#  - the tag is semver with a custom prerelease id, which electron-updater's GitHub
+#    provider skips for installs on the `beta` channel (and `/releases/latest`, which
+#    stable-only installs use, excludes pre-releases);
+#  - older installs (≤ 0.2.9) with beta updates on don't filter by channel, but they
+#    only look for `nightly-mac.yml` / `latest-mac.yml` — so the feed is named
+#    `opentrade-nightly-mac.yml` and they find no update instead of a different app.
+# `generic` reads the feed straight from the release's download URL (GitHub redirects
+# to the asset), so Nightly never walks the releases list.
+# A list, so it REPLACES the base config's github publish object instead of merging.
+publish:
+  - provider: generic
+    url: https://github.com/OpenTradeOSS/OpenTrade/releases/download/0.0.0-nightly
+    channel: opentrade-nightly

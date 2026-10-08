@@ -122,7 +122,7 @@ const settingKey = z.enum([
 ]);
 
 /** Onboarding step ids (mirrors renderer/screens/Onboarding.tsx). */
-export const OnboardingStep = z.enum(["claude", "broker", "showcase", "agent"]);
+export const OnboardingStep = z.enum(["claude", "broker", "vault", "showcase", "agent"]);
 export type OnboardingStep = z.infer<typeof OnboardingStep>;
 
 /** Agent template ids (mirrors templates/agents/*). */

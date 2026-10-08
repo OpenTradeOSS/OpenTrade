@@ -8,6 +8,7 @@ import type {
   HarnessId,
 } from "@shared/agent";
 import { templateOf } from "@shared/analytics";
+import { FEATURES } from "@shared/feature-flags";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { type Db, OPENTRADE_HOME } from "../../db/client";
@@ -15,7 +16,7 @@ import { agents as agentsTable } from "../../db/schema";
 import { analytics } from "../analytics";
 import { bus } from "../event-bus";
 import { harnessFor } from "../harness";
-import { resolveAgentMcp, resolveTemplatesDir } from "./paths";
+import { resolveTemplatesDir } from "./paths";
 
 const AGENTS_DIR = join(OPENTRADE_HOME, "agents");
 
@@ -41,6 +42,20 @@ function readTemplateSpecialty(templatesDir: string, template: string): string {
 }
 
 /**
+ * Resolve feature-gated blocks in an instructions template (`@shared/feature-flags`):
+ * `<!-- feature:NAME -->…<!-- /feature:NAME -->` is kept only when NAME is on, and
+ * `<!-- !feature:NAME -->…<!-- /!feature:NAME -->` only when it is off. Markers are
+ * always dropped, so agents never see them. Unknown names count as off.
+ */
+export function applyFeatureBlocks(text: string, features: Record<string, boolean>): string {
+  return text.replace(
+    /<!-- (!?)feature:(\w+) -->\n([\s\S]*?)<!-- \/\1feature:\2 -->\n?/g,
+    (_m, neg: string, name: string, body: string) =>
+      Boolean(features[name]) !== (neg === "!") ? body : "",
+  );
+}
+
+/**
  * Compose an agent's instructions file = the harness's shared OpenTrade prefix +
  * the given specialty section. The prefix (`templates/agents/CLAUDE.prefix.md` /
  * `AGENTS.prefix.codex.md`) carries the system mechanics every strategy shares
@@ -54,7 +69,7 @@ function composeInstructions(templatesDir: string, prefixFile: string, specialty
   if (!existsSync(prefixPath)) {
     throw new Error(`shared instructions prefix not found: ${prefixPath}`);
   }
-  const prefix = readFileSync(prefixPath, "utf8").trim();
+  const prefix = applyFeatureBlocks(readFileSync(prefixPath, "utf8"), FEATURES).trim();
   const s = specialty.trim();
   return s ? `${prefix}\n\n${s}\n` : `${prefix}\n`;
 }
@@ -235,11 +250,10 @@ export class AgentRegistry {
       return;
     }
 
-    // Claude-style scaffold: the template's Robinhood `.mcp.json` (+ the opentrade MCP),
-    // then the harness's generated config — for claude that's `.claude/settings.json`
-    // (the order-gate hook wiring, generated in code so it survives clean CI builds) and
-    // the hook scripts.
-    this.injectOpentradeMcp(dir);
+    // Claude-style scaffold: the harness's generated config — for claude that's the
+    // `.mcp.json` servers (Robinhood / Kalshi / PMXT per the Key Vault, + the opentrade
+    // MCP), `.claude/settings.json` (the order-gate hook wiring, generated in code so it
+    // survives clean CI builds), and the hook scripts. Re-run before every spawn.
     harness.writeConfig?.(dir, agentId);
   }
 
@@ -251,34 +265,6 @@ export class AgentRegistry {
    */
   templateClaudeMd(template: string): string {
     return readTemplateSpecialty(resolveTemplatesDir(), template);
-  }
-
-  /**
-   * Add the `opentrade` stdio MCP server to the agent's `.mcp.json` (alongside the
-   * template's Robinhood entry). Carries only the command + resolved binary path —
-   * NO token/port (R5); those are injected via the inherited spawn env at launch.
-   * Run as Node via the Electron binary (ELECTRON_RUN_AS_NODE) so packaged apps need
-   * no separate node on PATH.
-   */
-  private injectOpentradeMcp(dir: string): void {
-    const mcpPath = join(dir, ".mcp.json");
-    let config: { mcpServers?: Record<string, unknown> } = {};
-    if (existsSync(mcpPath)) {
-      try {
-        config = JSON.parse(readFileSync(mcpPath, "utf8"));
-      } catch {
-        config = {};
-      }
-    }
-    config.mcpServers = {
-      ...(config.mcpServers ?? {}),
-      opentrade: {
-        command: process.execPath,
-        args: [resolveAgentMcp()],
-        env: { ELECTRON_RUN_AS_NODE: "1" },
-      },
-    };
-    writeFileSync(mcpPath, `${JSON.stringify(config, null, 2)}\n`);
   }
 
   /** Mutate editable fields (name, approval mode, turn-limit toggle). Returns the updated agent. */

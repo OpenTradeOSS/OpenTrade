@@ -12,7 +12,7 @@ import { BrokerConnectionStatus } from "./broker";
 
 export const FEEDBACK_MESSAGE_MAX = 2000;
 
-export const FeedbackView = z.enum(["agents", "scheduled", "settings"]);
+export const FeedbackView = z.enum(["agents", "scheduled", "vault", "settings"]);
 export type FeedbackView = z.infer<typeof FeedbackView>;
 
 export const FeedbackInput = z.strictObject({

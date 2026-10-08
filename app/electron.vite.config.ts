@@ -3,6 +3,11 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
+// Release channel baked into every bundle (read by @shared/app-identity). The nightly
+// workflow builds with OPENTRADE_CHANNEL=nightly; everything else is stable.
+const channel = process.env.OPENTRADE_CHANNEL === "nightly" ? "nightly" : "stable";
+const define = { __OPENTRADE_CHANNEL__: JSON.stringify(channel) };
+
 export default defineConfig({
   main: {
     // Bundle `ws` and `posthog-node` into the daemon bundle (both pure JS, no
@@ -10,7 +15,10 @@ export default defineConfig({
     // ELECTRON_RUN_AS_NODE child resolving a bundled dep avoids the asar/runtime-
     // require fragility that bites native modules. node-pty stays externalized
     // (native, ABI-rebuilt).
-    plugins: [externalizeDepsPlugin({ exclude: ["ws", "posthog-node"] })],
+    plugins: [
+      externalizeDepsPlugin({ exclude: ["ws", "posthog-node", "@nktkas/hyperliquid", "viem"] }),
+    ],
+    define,
     resolve: {
       alias: {
         "@main": resolve("src/main"),
@@ -36,12 +44,20 @@ export default defineConfig({
           // spawned by `claude` (interactive + headless) per each agent's .mcp.json.
           // Dependency-free → self-contained bundle, robust under asar.
           "agent-mcp": resolve("src/agent-mcp/index.ts"),
+          // Per-agent Kalshi MCP server (`kalshi`): a stdio shim over the host's
+          // `/kalshi/call` (host signs with the vault key and gates writes). Same
+          // self-contained constraints as agent-mcp.
+          "kalshi-mcp": resolve("src/agent-mcp/kalshi.ts"),
+          // Per-agent Hyperliquid MCP server (`hyperliquid`): the same shim over
+          // `/hyperliquid/call`.
+          "hyperliquid-mcp": resolve("src/agent-mcp/hyperliquid.ts"),
         },
       },
     },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    define,
     resolve: {
       alias: {
         "@shared": resolve("src/shared"),
@@ -58,6 +74,7 @@ export default defineConfig({
   renderer: {
     root: "src/renderer",
     plugins: [react(), tailwindcss()],
+    define,
     resolve: {
       alias: {
         "@renderer": resolve("src/renderer"),

@@ -15,14 +15,17 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "prepackage": "node scripts/copy-native-modules.mjs",
     "package": "bun run prepackage && electron-vite build && electron-builder --config electron-builder.yml",
+    "package:nightly": "bun run prepackage && OPENTRADE_CHANNEL=nightly electron-vite build && electron-builder --config electron-builder.nightly.yml",
     "package:signed": "set -a; [ -f ../.env ] && . ../.env; set +a; bun run package",
     "pack:dir": "bun run prepackage && electron-vite build && electron-builder --dir --config electron-builder.yml",
+    "pack:dir:nightly": "bun run prepackage && OPENTRADE_CHANNEL=nightly electron-vite build && electron-builder --dir --config electron-builder.nightly.yml",
     "rebuild": "electron-builder install-app-deps",
     "make-icon": "node scripts/make-icon.mjs",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.28.0",
+    "@nktkas/hyperliquid": "0.33.3",
     "@radix-ui/react-alert-dialog": "1.1.15",
     "@radix-ui/react-dialog": "1.1.15",
     "@radix-ui/react-label": "2.1.8",
@@ -61,6 +64,7 @@
     "superjson": "2.2.6",
     "tailwind-merge": "3.4.0",
     "trpc-electron": "0.1.2",
+    "viem": "2.57.2",
     "ws": "8.18.0",
     "zod": "4.3.6",
     "zustand": "5.0.12"

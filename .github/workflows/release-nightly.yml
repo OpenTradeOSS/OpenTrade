@@ -1,0 +1,193 @@
+name: Release nightly (macOS)
+
+# OpenTrade Nightly, the Zed way: a scheduled build of `main` — no nightly branch.
+# Experimental features ship in every build but are only switched on in Nightly
+# (app/src/shared/feature-flags.ts); OPENTRADE_CHANNEL=nightly bakes that channel in,
+# and electron-builder.nightly.yml packages it as a SEPARATE app (OpenTrade Nightly,
+# ai.exla.opentrade.nightly, its own icon, data home ~/.opentrade-nightly).
+#
+# - One rolling pre-release in this repo, tag `0.0.0-nightly` ("OpenTrade Nightly"),
+#   like Zed's `nightly/` folder: each run replaces its assets and moves the tag to the
+#   commit it built, which is also how a run knows `main` hasn't moved (skip).
+#   The tag has no `v`, so release-desktop.yml (`v*.*.*`) never fires for it.
+# - Version: the next patch after the newest stable tag plus a UTC timestamp —
+#   e.g. 0.2.10-nightly.202610010900 — so every nightly sorts above the last one.
+# - Why these names can't reach stable installs: see electron-builder.nightly.yml.
+#   In short, the feed is `opentrade-nightly-mac.yml` and there is deliberately NO
+#   `latest-mac.yml` on this release (asserted below).
+# - Permanent download link:
+#   https://github.com/OpenTradeOSS/OpenTrade/releases/download/0.0.0-nightly/OpenTrade-Nightly-arm64.dmg
+#
+# Secrets: the same signing/notarization secrets as release-desktop.yml; the release
+# itself uses the built-in GITHUB_TOKEN.
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # 09:00 UTC — 2am Pacific, after the US trading day
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if main hasn't changed since the last nightly"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # the rolling release + its tag
+
+concurrency:
+  group: release-nightly
+  cancel-in-progress: false
+
+env:
+  NIGHTLY_TAG: 0.0.0-nightly
+  FEED: opentrade-nightly-mac.yml
+  KEEP_SOURCEMAPS: 14
+
+jobs:
+  check:
+    if: github.repository_owner == 'OpenTradeOSS'
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      version: ${{ steps.check.outputs.version }}
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0 # tags, for the base version
+      - id: check
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          echo "sha=$head" >>"$GITHUB_OUTPUT"
+          last=$(git rev-parse -q --verify "refs/tags/$NIGHTLY_TAG^{commit}" || true)
+          if [ "$head" = "$last" ] && [ "$FORCE" != "true" ]; then
+            echo "main ($head) was already built as a nightly — skipping."
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Base = one patch past the newest stable (vX.Y.Z, no suffix) tag or
+          # app/package.json, whichever is higher.
+          stable=$(git tag -l 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1)
+          pkg=$(jq -r .version app/package.json)
+          base=$(printf '%s\n%s\n' "${stable:-0.0.0}" "$pkg" | sort -V | tail -1)
+          IFS=. read -r major minor patch <<<"$base"
+          version="$major.$minor.$((patch + 1))-nightly.$(date -u +%Y%m%d%H%M)"
+          echo "Nightly $version from $head"
+          echo "skip=false" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: macos-14 # Apple Silicon runner (arm64)
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      SHA: ${{ needs.check.outputs.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Rebuild native modules for the Electron ABI
+        run: bun run --cwd app rebuild
+
+      - name: Test
+        run: bun test
+
+      # Same Developer ID signing + notarization as stable, so macOS treats Nightly as a
+      # normal app; falls back to ad-hoc when the signing secrets aren't configured.
+      # `package:nightly` builds with OPENTRADE_CHANNEL=nightly and the nightly config;
+      # the version comes from the check job (main's package.json keeps the last stable).
+      # `--publish never`: electron-builder still writes the feed; the steps below upload.
+      - name: Build & sign OpenTrade Nightly
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAIN_VITE_POSTHOG_API_KEY: ${{ secrets.MAIN_VITE_POSTHOG_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CSC_LINK" ]; then
+            echo "::warning::Ad-hoc build — no signing cert configured."
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          fi
+          bun run --cwd app package:nightly -- --publish never "-c.extraMetadata.version=$VERSION"
+          ls -la app/release
+          test -f "app/release/$FEED" || { echo "::error::$FEED was not generated"; exit 1; }
+          if [ -e app/release/latest-mac.yml ]; then
+            echo "::error::latest-mac.yml must never be published for Nightly (stable installs read it)"; exit 1
+          fi
+
+      # The rolling release is created once (pre-release, never "latest") and reused.
+      - name: Ensure the rolling release exists
+        run: |
+          set -euo pipefail
+          if ! gh release view "$NIGHTLY_TAG" >/dev/null 2>err.txt; then
+            grep -qi "release not found" err.txt || { cat err.txt; exit 1; }
+            gh release create "$NIGHTLY_TAG" --target "$SHA" --prerelease --latest=false \
+              --title "OpenTrade Nightly" --notes "Created by release-nightly.yml."
+          fi
+
+      # Order matters: new binaries first, the feed last (it names the new zip), then the
+      # previous build's versioned files. A client never reads a feed pointing at a
+      # missing file. The DMG name is fixed, so --clobber swaps it in place.
+      - name: Upload the build
+        run: |
+          set -euo pipefail
+          cd app/release
+          find ../out -name '*.js.map' -print0 | xargs -0 zip -q "sourcemaps-$VERSION.zip"
+          gh release upload "$NIGHTLY_TAG" --clobber \
+            OpenTrade-Nightly-*-arm64-mac.zip OpenTrade-Nightly-*-arm64-mac.zip.blockmap \
+            OpenTrade-Nightly-arm64.dmg OpenTrade-Nightly-arm64.dmg.blockmap \
+            "sourcemaps-$VERSION.zip"
+          gh release upload "$NIGHTLY_TAG" --clobber "$FEED"
+
+      - name: Remove the previous build's files
+        run: |
+          set -euo pipefail
+          # Older versioned zips (+ blockmaps), and all but the newest sourcemaps — kept so
+          # recent nightlies' errors still symbolicate. Selected with jq so an empty match
+          # isn't a failure.
+          gh release view "$NIGHTLY_TAG" --json assets --jq "
+            (.assets | map(select(.name | test(\"^OpenTrade-Nightly-.+-arm64-mac\\\\.zip(\\\\.blockmap)?$\"))
+                           | select(.name | contains(\"-$VERSION-\") | not)) | .[].name),
+            (.assets | map(select(.name | startswith(\"sourcemaps-\"))) | sort_by(.createdAt) | reverse
+                     | .[$KEEP_SOURCEMAPS:] | .[].name)" |
+            while read -r old; do
+              [ -n "$old" ] || continue
+              echo "deleting $old"
+              gh release delete-asset "$NIGHTLY_TAG" "$old" --yes
+            done
+
+      # Moving the tag marks this commit as built (the check job's skip) and keeps the
+      # release's "source code" links on what it contains.
+      - name: Point the release at this build
+        run: |
+          set -euo pipefail
+          git tag -f "$NIGHTLY_TAG" "$SHA"
+          git push -f origin "refs/tags/$NIGHTLY_TAG"
+          notes=$(printf '%s\n\n%s\n\n%s' \
+            "**$VERSION** — built from ${SHA::7} on \`main\`." \
+            "Download: [OpenTrade-Nightly-arm64.dmg](https://github.com/${GITHUB_REPOSITORY}/releases/download/$NIGHTLY_TAG/OpenTrade-Nightly-arm64.dmg). Installs as a separate app, OpenTrade Nightly, with its own data (~/.opentrade-nightly) and updates itself nightly." \
+            "Experimental features are on; expect rough edges.")
+          gh release edit "$NIGHTLY_TAG" --prerelease --latest=false --title "OpenTrade Nightly" --notes "$notes"
+          meta=$(gh release view "$NIGHTLY_TAG" --json assets,isPrerelease)
+          [ "$(jq -r .isPrerelease <<<"$meta")" = "true" ] || { echo "::error::rolling release must stay a pre-release"; exit 1; }
+          if jq -e '[.assets[].name] | any(. == "latest-mac.yml" or . == "nightly-mac.yml")' <<<"$meta" >/dev/null; then
+            echo "::error::a stable-readable feed is attached to $NIGHTLY_TAG — delete it"; exit 1
+          fi

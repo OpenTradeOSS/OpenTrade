@@ -36,7 +36,13 @@ export const ParsedOrder = z.object({
   multiplier: z.number().nullable().optional(),
   /** Net "debit" | "credit" (multi-leg). */
   direction: z.string().nullable().optional(),
+  /**
+   * A stop: for a stop order, the price that triggers it; for an entry order placed
+   * with protection attached (Hyperliquid `stop_loss`), the stop-loss trigger price.
+   */
   stopPrice: z.number().nullable().optional(),
+  /** Take-profit trigger price attached to an entry order. */
+  takeProfitPrice: z.number().nullable().optional(),
 });
 export type ParsedOrder = z.infer<typeof ParsedOrder>;
 

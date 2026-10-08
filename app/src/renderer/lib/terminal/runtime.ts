@@ -5,6 +5,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { shiftEnterToNewline } from "./keys";
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 32;
@@ -127,6 +128,13 @@ export function createRuntime(cb: RuntimeCallbacks): TerminalRuntime {
   };
 
   terminal.onData((data) => cb.onUserInput(data));
+
+  // Shift+Enter inserts a newline in the agent's prompt instead of submitting (see keys.ts).
+  terminal.attachCustomKeyEventHandler((e) => {
+    const r = shiftEnterToNewline(e);
+    if (r.send) cb.onUserInput(r.send);
+    return r.passThrough;
+  });
 
   // Debounced fit + resize-notify driven by the wrapper's size.
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;

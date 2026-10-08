@@ -1,3 +1,4 @@
+import { FEATURES } from "@shared/feature-flags";
 import { NewAgentDialog } from "./components/agents/NewAgentDialog";
 import { AgentSidebar } from "./components/layout/AgentSidebar";
 import { RightPanel } from "./components/layout/RightPanel";
@@ -9,6 +10,7 @@ import { useShellSelection } from "./lib/shell";
 import { backendStarted } from "./lib/trpc";
 import { cn } from "./lib/utils";
 import { BackendFailed } from "./screens/BackendFailed";
+import { KeyVaultScreen } from "./screens/KeyVault";
 import { Onboarding } from "./screens/Onboarding";
 import { ScheduledScreen } from "./screens/Scheduled";
 import { SettingsScreen } from "./screens/Settings";
@@ -51,6 +53,7 @@ export function App() {
           <RightPanel />
         </div>
         {view === "scheduled" && <ScheduledScreen />}
+        {FEATURES.venues && view === "vault" && <KeyVaultScreen />}
         {view === "settings" && <SettingsScreen />}
       </div>
       <NewAgentDialog />

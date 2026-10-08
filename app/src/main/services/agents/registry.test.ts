@@ -87,29 +87,29 @@ describe("AgentRegistry — CLAUDE.md composition", () => {
   // Markers unique to each half of the composed file.
   const PREFIX_MARKER = "## Self-scheduling — staying awake on the user's behalf";
 
-  function claudeMdFor(template: string): string {
+  // The specialty comes from the New Agent dialog (`claudeMd`) or the template's own
+  // CLAUDE.md; the templates in the repo carry none, so pass it explicitly here.
+  function claudeMdFor(template: string, claudeMd?: string): string {
     const r = memRegistry();
     const agent = r.create({
       name: `compose ${template}`,
       template,
       harness: "claude",
       approvalMode: "approve",
+      claudeMd,
     });
     return readFileSync(join(r.agentDir(agent), "CLAUDE.md"), "utf8");
   }
 
-  test("prepends the shared OpenTrade prefix to every template's specialty section", () => {
-    for (const [template, specialtyMarker] of [
-      ["default", "## Your specialty — general purpose"],
-      ["dca", "## Your specialty — dollar-cost averaging (DCA)"],
-      ["momentum", "## Your specialty — momentum / trend-following"],
-    ] as const) {
-      const md = claudeMdFor(template);
+  test("prepends the shared OpenTrade prefix to the specialty section", () => {
+    for (const template of ["default", "dca", "momentum"]) {
+      const specialtyMarker = `## Your specialty — ${template}`;
+      const md = claudeMdFor(template, `${specialtyMarker}\n\nTrade carefully.`);
       expect(md).toContain(PREFIX_MARKER); // shared mechanics present…
-      expect(md).toContain(specialtyMarker); // …followed by the template's own section
+      expect(md).toContain(specialtyMarker); // …followed by the specialty section
       // Prefix comes first, specialty after.
       expect(md.indexOf(PREFIX_MARKER)).toBeLessThan(md.indexOf(specialtyMarker));
-      // The shared title appears exactly once (the specialty file no longer carries its own H1).
+      // The shared title appears exactly once.
       expect(md.startsWith("# OpenTrade Agent\n")).toBe(true);
       expect(md.split("# OpenTrade Agent").length - 1).toBe(1);
     }
@@ -118,7 +118,7 @@ describe("AgentRegistry — CLAUDE.md composition", () => {
   test("unknown templates fall back to default but still get the prefix", () => {
     const md = claudeMdFor("does-not-exist");
     expect(md).toContain(PREFIX_MARKER);
-    expect(md).toContain("## Your specialty — general purpose");
+    expect(md.startsWith("# OpenTrade Agent\n")).toBe(true);
   });
 });
 

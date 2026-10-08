@@ -9,6 +9,8 @@ import type { Scheduler } from "../scheduler";
 import { categoryForStopFailure } from "../scheduler/wake/failure-category";
 import type { WakeTransport } from "../scheduler/wake/types";
 import type { StatusArbiter } from "../status/arbiter";
+import type { HyperliquidService } from "../venues/hyperliquid";
+import type { KalshiService } from "../venues/kalshi";
 
 /** How long a `/wake-stream` long-poll is held open before returning empty (the
  *  agent's channel poller then immediately re-polls). */
@@ -19,6 +21,10 @@ interface Deps {
   approvals: ApprovalService;
   registry: AgentRegistry;
   arbiter: StatusArbiter;
+  /** Kalshi venue (host-side signing + gate) behind `POST /kalshi/call`. Optional in tests. */
+  kalshi?: KalshiService;
+  /** Hyperliquid venue, same contract, behind `POST /hyperliquid/call`. */
+  hyperliquid?: HyperliquidService;
   /** Desired bind port. Stable (home-derived) in the app; omit (→ ephemeral) in tests. */
   port?: number;
   /** Persisted bearer token. Reused across restarts; omit (→ random) in tests. */
@@ -40,6 +46,9 @@ const BIND_RETRY_MS = 300;
  * - Hook endpoints (M3): the PreToolUse approval gate and the Notification/Stop
  *   status feed, called by the scaffolded hook scripts in each agent folder:
  *     POST /hook/pretool-approval   POST /hook/status
+ * - Venue proxy: the `kalshi` MCP server's tool calls, signed here with the vault key
+ *   and gated server-side (writes wait on the approval gate):
+ *     POST /kalshi/call  { tool, args }
  *
  * Bound to 127.0.0.1 with a per-launch bearer token (x-opentrade-token). The
  * hook scripts fail CLOSED if this server is unreachable, so a manually-launched
@@ -143,6 +152,12 @@ export class LocalApiServer {
       return this.handleOrderResult(req, res);
     }
 
+    if (req.method === "POST" && url.pathname === "/kalshi/call") {
+      return this.handleVenue(this.deps.kalshi, "kalshi", req, res);
+    }
+    if (req.method === "POST" && url.pathname === "/hyperliquid/call") {
+      return this.handleVenue(this.deps.hyperliquid, "hyperliquid", req, res);
+    }
     if (req.method === "GET" && url.pathname === "/wake-stream") {
       return this.handleWakeStream(req, res);
     }
@@ -198,6 +213,33 @@ export class LocalApiServer {
       { signal: ac.signal },
     );
     if (!res.writableEnded) json(res, 200, decision);
+  }
+
+  /**
+   * A venue MCP (`kalshi` / `hyperliquid`) tool call. Reads return immediately; writes long-poll the approval
+   * gate inside the service's `call` (like `/hook/pretool-approval`), so a dropped
+   * connection abandons the pending card. Venue/input errors are a 200 with
+   * `{ ok:false, error }` — they're the agent's to read, not transport failures.
+   */
+  private async handleVenue(
+    venue: KalshiService | HyperliquidService | undefined,
+    name: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ) {
+    if (!venue) return json(res, 503, { error: `${name} not available` });
+    const agentId = header(req, "x-opentrade-agent");
+    if (!agentId || !this.registry.get(agentId)) {
+      return json(res, 404, { error: "unknown agent" });
+    }
+    const body = await readJson(req);
+    const tool = String(body?.tool ?? "");
+    const args =
+      body?.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+    const ac = new AbortController();
+    req.on("close", () => ac.abort());
+    const result = await venue.call(agentId, tool, args, ac.signal);
+    json(res, 200, result);
   }
 
   /**

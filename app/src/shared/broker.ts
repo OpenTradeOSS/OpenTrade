@@ -155,6 +155,18 @@ export const OrderStatus = z.object({
   /** Net premium ordered (`premium`, dollars) and executed (`processed_premium`). */
   premium: z.number().nullable().optional(),
   processedPremium: z.number().nullable().optional(),
+  // ---- trigger orders (Hyperliquid stops / take-profits) ----
+  /**
+   * Set when the order only activates at a price: a stop-loss (`sl`) or take-profit
+   * (`tp`) and the mark price that triggers it. A `filled` order carrying this is a
+   * stop that FIRED — the reason the position was sold.
+   */
+  trigger: z
+    .object({ kind: z.enum(["sl", "tp"]), price: z.number() })
+    .nullable()
+    .optional(),
+  /** The order can only shrink a position (how an attached stop is placed). */
+  reduceOnly: z.boolean().optional(),
 });
 export type OrderStatus = z.infer<typeof OrderStatus>;
 

@@ -12,6 +12,8 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { APP_DISPLAY_NAME, IS_NIGHTLY } from "@shared/app-identity";
+import { FEATURES } from "@shared/feature-flags";
 import { isPrereleaseVersion } from "@shared/updater";
 import { createDb, OPENTRADE_HOME } from "../db/client";
 import { AgentRegistry } from "../services/agents/registry";
@@ -26,6 +28,7 @@ import { registerHarness } from "../services/harness";
 import { CODEX_SUBSCRIPTION_AUTH_STRIP, createCodexHarness } from "../services/harness/codex";
 import { CodexAppServerManager } from "../services/harness/codex-app-server";
 import { buildCodexAnswerer, buildInteractivePushFactory } from "../services/harness/codex-gate";
+import { setIntegrationSource } from "../services/integrations";
 import { LocalApiServer } from "../services/local-api";
 import { derivePort } from "../services/local-api/endpoint";
 import { RecentNotificationsService } from "../services/notifications/recent";
@@ -41,6 +44,9 @@ import { SettingsService } from "../services/settings";
 import { StatusArbiter } from "../services/status/arbiter";
 import { TerminalService } from "../services/terminal";
 import { buildAgentEnv } from "../services/terminal/env";
+import { VaultService } from "../services/vault";
+import { HyperliquidService } from "../services/venues/hyperliquid";
+import { KalshiService } from "../services/venues/kalshi";
 import type { Context } from "../trpc/trpc";
 import { hostLog } from "./log";
 import { clearManifest, writeManifest } from "./manifest";
@@ -65,7 +71,7 @@ function openExternal(url: string): void {
 async function main() {
   // Name the detached backend so it reads as OpenTrade in `ps`/`top` (it's an
   // ELECTRON_RUN_AS_NODE child of the app binary). See docs/PACKAGING.md.
-  process.title = "OpenTrade Host";
+  process.title = `${APP_DISPLAY_NAME} Host`;
   hostLog.info(`host starting (pid ${process.pid}) home=${OPENTRADE_HOME}`);
 
   const db = createDb(hostLog);
@@ -85,6 +91,21 @@ async function main() {
   const arbiter = new StatusArbiter(registry);
   const audit = new AuditLog(db, registry);
   const approvals = new ApprovalService(db, registry, audit, arbiter);
+  // Key Vault: optional venue credentials + integration switches. Registered as the
+  // process-wide integration source BEFORE anything can spawn an agent, so every
+  // harness config write and agent env reflects it (Robinhood / Kalshi / Hyperliquid / PMXT).
+  // Experimental (`FEATURES.venues`, Nightly only): off, the vault isn't consulted and
+  // agents keep the pre-vault behavior — Robinhood only, no extra env, no Kalshi.
+  const vault = new VaultService(db);
+  const kalshi = new KalshiService(vault, approvals);
+  const hyperliquid = new HyperliquidService(vault, approvals);
+  if (FEATURES.venues) {
+    setIntegrationSource(vault);
+    // Poll the Kalshi account (Portfolio → Kalshi, the connected indicator); idles
+    // while the vault has no Kalshi key and re-arms whenever the vault changes.
+    kalshi.start();
+    hyperliquid.start();
+  }
   // Fresh host process → no agent hook is still long-polling, so pending rows
   // really are orphans.
   approvals.expireOrphansOnBoot();
@@ -115,6 +136,8 @@ async function main() {
     approvals,
     registry,
     arbiter,
+    kalshi: FEATURES.venues ? kalshi : undefined,
+    hyperliquid: FEATURES.venues ? hyperliquid : undefined,
     port: derivePort(),
     token,
   });
@@ -208,6 +231,9 @@ async function main() {
     scheduler,
     wake,
     recent,
+    vault,
+    kalshi,
+    hyperliquid,
   };
   const trpc = new HostTrpcServer(ctx, token);
   await trpc.listen();
@@ -243,7 +269,8 @@ async function main() {
     // stays there, through the graduation to the stable release, until the user turns it
     // off in Settings → About; that explicit off holds until the next beta is installed by
     // hand. (A same-value write is a no-op downstream: no telemetry, no updater re-check.)
-    if (isPrereleaseVersion(runVersion)) {
+    // Nightly versions are prereleases too, but Nightly has its own feed (no beta toggle).
+    if (isPrereleaseVersion(runVersion) && !IS_NIGHTLY) {
       settings.update({ updateChannel: "beta" });
       hostLog.info(`beta build ${runVersion} installed — update channel set to beta`);
     }
