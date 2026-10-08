@@ -48,6 +48,12 @@ export function resolveAgentMcp(): string {
   return local.includes("app.asar") ? local.replace("app.asar", "app.asar.unpacked") : local;
 }
 
+/** Absolute path to the bundled `hyperliquid` agent-MCP server — same layout rules. */
+export function resolveHyperliquidMcp(): string {
+  const local = join(__dirname, "hyperliquid-mcp.js");
+  return local.includes("app.asar") ? local.replace("app.asar", "app.asar.unpacked") : local;
+}
+
 /** Absolute path to the bundled `kalshi` agent-MCP server — same layout rules as above. */
 export function resolveKalshiMcp(): string {
   const local = join(__dirname, "kalshi-mcp.js");

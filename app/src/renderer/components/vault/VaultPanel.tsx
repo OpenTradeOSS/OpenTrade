@@ -1,6 +1,13 @@
-import { envVarFor, type KalshiEnv, type VaultKey, type VaultStatus } from "@shared/vault";
+import {
+  envVarFor,
+  type HyperliquidEnv,
+  type KalshiEnv,
+  type VaultKey,
+  type VaultStatus,
+} from "@shared/vault";
 import { AlertTriangle, Check, ExternalLink, FileKey, Loader2, Plus, X } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
+import { useHyperliquidPortfolio, useHyperliquidStatus } from "../../hooks/useHyperliquid";
 import { useKalshiPortfolio, useKalshiStatus } from "../../hooks/useKalshi";
 import { usd } from "../../lib/format";
 import { trpc } from "../../lib/trpc";
@@ -17,6 +24,13 @@ const KALSHI_KEYS_URL: Record<KalshiEnv, string> = {
   prod: "https://kalshi.com/account/profile",
   demo: "https://demo.kalshi.co/account/profile",
 };
+/** Where Hyperliquid users create API wallets (More → API). */
+const HYPERLIQUID_API_URL: Record<HyperliquidEnv, string> = {
+  mainnet: "https://app.hyperliquid.xyz/API",
+  testnet: "https://app.hyperliquid-testnet.xyz/API",
+};
+const HYPERLIQUID_DOCS_URL =
+  "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/nonces-and-api-wallets";
 const KALSHI_DOCS_URL = "https://docs.kalshi.com/getting_started/api_keys";
 
 /** Vault status, kept live across the sidebar screen and the onboarding step. */
@@ -31,8 +45,8 @@ export function useVault() {
 
 /**
  * The Key Vault. Two parts:
- *  - **Trading venues** — Robinhood (a switch; its CLIs sign in themselves) and Kalshi,
- *    which gets a guided setup since it needs a key pair from Kalshi's site.
+ *  - **Trading venues** — Robinhood (a switch; its CLIs sign in themselves), and Kalshi
+ *    and Hyperliquid, which get a guided setup since each needs a key from its site.
  *  - **API keys** — any number of plain name + key entries; each reaches every agent as
  *    an environment variable (PMXT's is also wired to its market-data tools).
  * Secrets are write-only from here: the host returns hints (`…d808e`), never values.
@@ -56,6 +70,7 @@ export function VaultPanel({ compact = false }: { compact?: boolean }) {
         />
         <RobinhoodCard status={status} />
         <KalshiCard status={status} />
+        <HyperliquidCard status={status} />
       </section>
       <section className="flex flex-col gap-3">
         <SectionTitle
@@ -103,7 +118,7 @@ function RobinhoodCard({ status }: { status: VaultStatus }) {
       />
       <p className="text-xs text-muted-foreground">
         Robinhood's Agentic Trading MCP. No key needed: each agent CLI signs in to Robinhood itself.
-        Switch it off if you only trade Kalshi.
+        Switch it off if you only trade other venues.
       </p>
     </Card>
   );
@@ -360,6 +375,235 @@ function KalshiSetup({
           message={`Saved, but Kalshi refused it: ${test.data.message}. Check the Key ID, the key file, and that the account matches.`}
         />
       )}
+    </form>
+  );
+}
+
+// ---- Hyperliquid ----
+
+const shortAddr = (a: string | null) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—");
+
+function HyperliquidCard({ status }: { status: VaultStatus }) {
+  const h = status.hyperliquid;
+  const [setupOpen, setSetupOpen] = useState(false);
+  const setEnabled = useSetEnabled();
+  const live = useHyperliquidStatus();
+  const portfolio = useHyperliquidPortfolio();
+  const utils = trpc.useUtils();
+  const remove = trpc.vault.removeHyperliquid.useMutation({
+    onSuccess: (s) => utils.vault.status.setData(undefined, s),
+  });
+  const test = trpc.vault.testHyperliquid.useMutation();
+
+  const badge = !h.configured ? (
+    <Badge tone="none">Not connected</Badge>
+  ) : !h.enabled ? (
+    <Badge tone="off">Off</Badge>
+  ) : live?.state === "connected" ? (
+    <Badge tone="on">Connected{h.env === "testnet" ? " · testnet" : ""}</Badge>
+  ) : live?.state === "error" ? (
+    <Badge tone="error">Error</Badge>
+  ) : (
+    <Badge tone="off">Connecting…</Badge>
+  );
+
+  return (
+    <Card>
+      <CardHeader
+        title="Hyperliquid"
+        kind="Perps and spot crypto"
+        badge={badge}
+        action={
+          h.configured ? (
+            <SettingToggle
+              checked={h.enabled}
+              disabled={setEnabled.isPending}
+              onChange={(enabled) => setEnabled.mutate({ id: "hyperliquid", enabled })}
+            />
+          ) : null
+        }
+      />
+
+      {!h.configured || setupOpen ? (
+        <HyperliquidSetup
+          initialEnv={h.env}
+          replacing={h.configured}
+          onDone={() => setSetupOpen(false)}
+          onCancel={h.configured ? () => setSetupOpen(false) : undefined}
+        />
+      ) : (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground">
+            Agents read markets and your Hyperliquid account and place orders through OpenTrade. The
+            API wallet signs inside OpenTrade, is never handed to an agent, and cannot withdraw
+            funds.
+          </p>
+          <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2">
+            <div className="flex min-w-0 flex-col">
+              <span className="font-mono text-xs text-muted-foreground">
+                Account {shortAddr(h.account)} · API wallet {shortAddr(h.apiWallet)} ·{" "}
+                {h.env === "testnet" ? "Testnet" : "Mainnet"}
+              </span>
+              {h.enabled && live?.state === "connected" && portfolio && (
+                <span className="text-xs text-success">
+                  Account value {usd(portfolio.equity)} · {portfolio.positions.length} open position
+                  {portfolio.positions.length === 1 ? "" : "s"}
+                </span>
+              )}
+              {h.enabled && live?.state === "error" && (
+                <span className="text-xs text-destructive">{live.message}</span>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={test.isPending}
+                onClick={() => test.mutate()}
+              >
+                {test.isPending && <Loader2 className="size-3 animate-spin" />}
+                Test
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setSetupOpen(true)}>
+                Replace
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate()}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
+          {test.data && <Result ok={test.data.ok} message={test.data.message} />}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Guided Hyperliquid connection. Hyperliquid's "API wallet" is a second key the main
+ * wallet authorizes to trade (never to withdraw); its private key is shown once, when
+ * it is generated. That key is all the user pastes: the host asks Hyperliquid which
+ * account authorized it, and refuses a main wallet's key outright.
+ */
+function HyperliquidSetup({
+  initialEnv,
+  replacing,
+  onDone,
+  onCancel,
+}: {
+  initialEnv: HyperliquidEnv;
+  replacing: boolean;
+  onDone: () => void;
+  onCancel?: () => void;
+}) {
+  const [env, setEnv] = useState<HyperliquidEnv>(initialEnv);
+  const [key, setKey] = useState("");
+  const [account, setAccount] = useState("");
+  const utils = trpc.useUtils();
+  const save = trpc.vault.saveHyperliquid.useMutation({
+    onSuccess: (s) => {
+      utils.vault.status.setData(undefined, s);
+      onDone();
+    },
+  });
+  const canSave = replacing || key.trim().length > 0;
+
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSave) {
+          save.mutate({
+            privateKey: key.trim() || undefined,
+            accountAddress: account.trim() || undefined,
+            env,
+          });
+        }
+      }}
+    >
+      <Step n={1} title="Pick the network">
+        <SegmentedControl
+          options={[
+            { value: "mainnet", label: "Mainnet" },
+            { value: "testnet", label: "Testnet (mock money)" },
+          ]}
+          value={env}
+          onChange={setEnv}
+        />
+      </Step>
+
+      <Step n={2} title="Create an API wallet on Hyperliquid">
+        <p className="text-xs text-muted-foreground">
+          On Hyperliquid open <span className="text-foreground">More → API</span>, name a wallet,
+          choose <span className="text-foreground">Generate</span>, then{" "}
+          <span className="text-foreground">Authorize API Wallet</span>. Hyperliquid shows its
+          private key once, so copy it then. An API wallet can trade but cannot withdraw.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <ExternalHint href={HYPERLIQUID_API_URL[env]}>
+            Open Hyperliquid {env === "testnet" ? "testnet " : ""}API
+          </ExternalHint>
+          <ExternalHint href={HYPERLIQUID_DOCS_URL}>About API wallets</ExternalHint>
+        </div>
+      </Step>
+
+      <Step
+        n={3}
+        title={
+          replacing
+            ? "Paste the API wallet's private key (optional: keeps the saved one)"
+            : "Paste the API wallet's private key"
+        }
+      >
+        <Input
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="0x… (64 hex characters)"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label="Hyperliquid API wallet private key"
+          className="font-mono text-xs"
+        />
+        <p className="text-xs text-muted-foreground">
+          Never paste your main wallet's key or seed phrase. OpenTrade refuses a key that can
+          withdraw.
+        </p>
+      </Step>
+
+      <Step n={4} title="Sub-account or vault address (optional)">
+        <Input
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+          placeholder="Leave empty to trade your main account"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label="Hyperliquid sub-account address"
+          className="font-mono text-xs"
+        />
+      </Step>
+
+      <div className="flex items-center justify-end gap-2">
+        {onCancel && (
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+        <Button type="submit" disabled={!canSave || save.isPending}>
+          {save.isPending && <Loader2 className="size-4 animate-spin" />}
+          {save.isPending ? "Checking with Hyperliquid…" : "Connect Hyperliquid"}
+        </Button>
+      </div>
+      {save.isError && <Result ok={false} message={errorText(save.error)} />}
     </form>
   );
 }

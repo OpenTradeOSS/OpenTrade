@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PREALLOWED_TOOL_PATTERNS } from "@shared/robinhood-tools";
 import { type AgentIntegrations, PMXT_KEY_ENV } from "@shared/vault";
-import { resolveAgentMcp, resolveKalshiMcp } from "../agents/paths";
+import { resolveAgentMcp, resolveHyperliquidMcp, resolveKalshiMcp } from "../agents/paths";
 import { ROBINHOOD_MCP_URL } from "./robinhood-mcp";
 
 /**
@@ -32,7 +32,7 @@ export const PMXT_DENIED_TOOLS = [
 ] as const;
 
 /** Server names OpenTrade owns in an agent's `.mcp.json` (anything else is left alone). */
-const MANAGED_SERVERS = ["robinhood", "kalshi", "pmxt", "opentrade"] as const;
+const MANAGED_SERVERS = ["robinhood", "kalshi", "hyperliquid", "pmxt", "opentrade"] as const;
 
 /** Claude `.mcp.json` entries for the enabled integrations (+ the always-on `opentrade`). */
 export function claudeMcpServers(on: AgentIntegrations): Record<string, unknown> {
@@ -42,6 +42,13 @@ export function claudeMcpServers(on: AgentIntegrations): Record<string, unknown>
     servers.kalshi = {
       command: process.execPath,
       args: [resolveKalshiMcp()],
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+    };
+  }
+  if (on.hyperliquid) {
+    servers.hyperliquid = {
+      command: process.execPath,
+      args: [resolveHyperliquidMcp()],
       env: { ELECTRON_RUN_AS_NODE: "1" },
     };
   }
@@ -95,8 +102,8 @@ export function claudeEnabledServers(on: AgentIntegrations): string[] {
 }
 
 /**
- * `permissions.allow`. Robinhood's reads/cosmetic writes as before. Kalshi is allowed
- * whole: its money-movers are gated server-side in the host (KalshiService), so a
+ * `permissions.allow`. Robinhood's reads/cosmetic writes as before. Kalshi and
+ * Hyperliquid are allowed whole: their money-movers are gated server-side in the host, so a
  * Claude permission prompt on top would only double-ask. PMXT reads are allowed; its
  * writes are denied (below).
  */
@@ -105,6 +112,7 @@ export function claudeAllow(on: AgentIntegrations): string[] {
     ...(on.robinhood ? PREALLOWED_TOOL_PATTERNS : []),
     "mcp__opentrade__*",
     ...(on.kalshi ? ["mcp__kalshi__*"] : []),
+    ...(on.hyperliquid ? ["mcp__hyperliquid__*"] : []),
     ...(on.pmxt
       ? [
           "mcp__pmxt__fetch*",

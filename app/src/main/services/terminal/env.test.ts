@@ -29,3 +29,35 @@ describe("buildAgentEnv — subscription auth", () => {
     expect(env.OPENTRADE_AGENT_ID).toBe("a1");
   });
 });
+
+describe("buildAgentEnv — started from inside an agent session", () => {
+  const OUTER = {
+    CLAUDECODE: "1",
+    CLAUDE_CODE_SESSION_ID: "outer",
+    CLAUDE_CODE_CHILD_SESSION: "1",
+    CLAUDE_CODE_MESSAGING_SOCKET: "/tmp/x.sock",
+    CLAUDE_CODE_USE_BEDROCK: "1",
+  };
+  const prev: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const [k, v] of Object.entries(OUTER)) {
+      prev[k] = process.env[k];
+      process.env[k] = v;
+    }
+  });
+  afterEach(() => {
+    for (const k of Object.keys(OUTER)) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+  });
+
+  test("drops the outer session's identity but keeps the user's CLI configuration", () => {
+    const env = buildAgentEnv("a1");
+    expect(env.CLAUDECODE).toBeUndefined();
+    expect(env.CLAUDE_CODE_SESSION_ID).toBeUndefined();
+    expect(env.CLAUDE_CODE_CHILD_SESSION).toBeUndefined();
+    expect(env.CLAUDE_CODE_MESSAGING_SOCKET).toBeUndefined();
+    expect(env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
+  });
+});

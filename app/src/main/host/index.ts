@@ -45,6 +45,7 @@ import { StatusArbiter } from "../services/status/arbiter";
 import { TerminalService } from "../services/terminal";
 import { buildAgentEnv } from "../services/terminal/env";
 import { VaultService } from "../services/vault";
+import { HyperliquidService } from "../services/venues/hyperliquid";
 import { KalshiService } from "../services/venues/kalshi";
 import type { Context } from "../trpc/trpc";
 import { hostLog } from "./log";
@@ -92,16 +93,18 @@ async function main() {
   const approvals = new ApprovalService(db, registry, audit, arbiter);
   // Key Vault: optional venue credentials + integration switches. Registered as the
   // process-wide integration source BEFORE anything can spawn an agent, so every
-  // harness config write and agent env reflects it (Robinhood / Kalshi / PMXT).
+  // harness config write and agent env reflects it (Robinhood / Kalshi / Hyperliquid / PMXT).
   // Experimental (`FEATURES.venues`, Nightly only): off, the vault isn't consulted and
   // agents keep the pre-vault behavior — Robinhood only, no extra env, no Kalshi.
   const vault = new VaultService(db);
   const kalshi = new KalshiService(vault, approvals);
+  const hyperliquid = new HyperliquidService(vault, approvals);
   if (FEATURES.venues) {
     setIntegrationSource(vault);
     // Poll the Kalshi account (Portfolio → Kalshi, the connected indicator); idles
     // while the vault has no Kalshi key and re-arms whenever the vault changes.
     kalshi.start();
+    hyperliquid.start();
   }
   // Fresh host process → no agent hook is still long-polling, so pending rows
   // really are orphans.
@@ -134,6 +137,7 @@ async function main() {
     registry,
     arbiter,
     kalshi: FEATURES.venues ? kalshi : undefined,
+    hyperliquid: FEATURES.venues ? hyperliquid : undefined,
     port: derivePort(),
     token,
   });
@@ -229,6 +233,7 @@ async function main() {
     recent,
     vault,
     kalshi,
+    hyperliquid,
   };
   const trpc = new HostTrpcServer(ctx, token);
   await trpc.listen();

@@ -1,6 +1,7 @@
 import {
   IntegrationId,
   PMXT_KEY_ENV,
+  SaveHyperliquidInput,
   SaveKalshiInput,
   SaveKeyInput,
   type VaultStatus,
@@ -24,6 +25,16 @@ export const vaultRouter = router({
     .mutation(({ ctx, input }) => ctx.vault.saveKalshi(input)),
 
   removeKalshi: publicProcedure.mutation(({ ctx }) => ctx.vault.removeKalshi()),
+
+  /** Resolves the account on Hyperliquid and verifies the key is an API wallet first. */
+  saveHyperliquid: publicProcedure
+    .input(SaveHyperliquidInput)
+    .mutation(({ ctx, input }) => ctx.hyperliquid.save(input)),
+
+  removeHyperliquid: publicProcedure.mutation(({ ctx }) => ctx.vault.removeHyperliquid()),
+
+  /** Prove the stored key is still an approved API wallet for the account. */
+  testHyperliquid: publicProcedure.mutation(({ ctx }) => ctx.hyperliquid.test()),
 
   setEnabled: publicProcedure
     .input(z.object({ id: IntegrationId, enabled: z.boolean() }))

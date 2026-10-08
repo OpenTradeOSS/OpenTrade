@@ -1,6 +1,7 @@
 import {
   type AgentIntegrations,
   envVarFor,
+  type HyperliquidEnv,
   type IntegrationId,
   type KalshiEnv,
   KEY_NAMES_ENV,
@@ -16,12 +17,14 @@ import type { Db } from "../../db/client";
 import { settings as settingsTable } from "../../db/schema";
 import { bus } from "../event-bus";
 import type { IntegrationSource } from "../integrations";
+import { addressOf, type HyperliquidCredentials } from "../venues/hyperliquid/client";
 import { type KalshiCredentials, parseKalshiKey } from "../venues/kalshi/client";
 
 // kv keys. Secrets live in the app DB like the Robinhood OAuth tokens: plaintext in a
 // 0600 file under the 0700 ~/.opentrade (no safeStorage under ELECTRON_RUN_AS_NODE —
 // see broker/robinhood/oauth.ts SecureStore).
 const K_KALSHI = "vault_kalshi";
+const K_HYPERLIQUID = "vault_hyperliquid";
 const K_KEYS = "vault_keys";
 /** Pre-list single PMXT slot; folded into `vault_keys` on first read. */
 const K_LEGACY_PMXT = "vault_pmxt";
@@ -42,6 +45,9 @@ const KNOWN_KEYS: Record<string, { wiredAs: string; testable: boolean }> = {
 interface StoredKalshi extends KalshiCredentials {
   enabled: boolean;
 }
+interface StoredHyperliquid extends HyperliquidCredentials {
+  enabled: boolean;
+}
 interface StoredKey {
   name: string;
   envVar: string;
@@ -58,6 +64,7 @@ export class VaultService implements IntegrationSource {
 
   status(): VaultStatus {
     const kalshi = this.kalshiStored();
+    const hl = this.hyperliquidStored();
     return {
       robinhood: { enabled: this.robinhoodEnabled() },
       kalshi: {
@@ -65,6 +72,13 @@ export class VaultService implements IntegrationSource {
         enabled: kalshi?.enabled ?? false,
         env: kalshi?.env ?? "prod",
         keyIdHint: kalshi ? secretHint(kalshi.keyId, 6) : null,
+      },
+      hyperliquid: {
+        configured: hl !== null,
+        enabled: hl?.enabled ?? false,
+        env: hl?.env ?? "mainnet",
+        account: hl?.accountAddress ?? null,
+        apiWallet: hl ? addressOf(hl.privateKey) : null,
       },
       keys: this.keysStored().map(
         (k): VaultKey => ({
@@ -95,6 +109,25 @@ export class VaultService implements IntegrationSource {
       env: clean.env,
       enabled: prior?.enabled ?? true,
     } satisfies StoredKalshi);
+    return this.changed();
+  }
+
+  /**
+   * Store a Hyperliquid API wallet. `HyperliquidService.save` is the entry point: it
+   * resolves and verifies the account on the venue first, so what lands here is a key
+   * Hyperliquid has confirmed is an approved API wallet (not a main wallet's key).
+   */
+  saveHyperliquid(creds: HyperliquidCredentials): VaultStatus {
+    const prior = this.hyperliquidStored();
+    this.write(K_HYPERLIQUID, {
+      ...creds,
+      enabled: prior?.enabled ?? true,
+    } satisfies StoredHyperliquid);
+    return this.changed();
+  }
+
+  removeHyperliquid(): VaultStatus {
+    this.db.delete(settingsTable).where(eq(settingsTable.key, K_HYPERLIQUID)).run();
     return this.changed();
   }
 
@@ -130,6 +163,10 @@ export class VaultService implements IntegrationSource {
   setEnabled(id: IntegrationId, enabled: boolean): VaultStatus {
     if (id === "robinhood") {
       this.writeRaw(K_ROBINHOOD_ENABLED, enabled ? "1" : "0");
+    } else if (id === "hyperliquid") {
+      const h = this.hyperliquidStored();
+      if (!h) throw new Error("Add a Hyperliquid API wallet first.");
+      this.write(K_HYPERLIQUID, { ...h, enabled });
     } else {
       const k = this.kalshiStored();
       if (!k) throw new Error("Add Kalshi credentials first.");
@@ -145,6 +182,14 @@ export class VaultService implements IntegrationSource {
     return { keyId: k.keyId, privateKeyPem: k.privateKeyPem, env: k.env };
   }
 
+  /** Credentials for the host's Hyperliquid client, or null when it is off/absent. */
+  hyperliquidCredentials(opts: { includeDisabled?: boolean } = {}): HyperliquidCredentials | null {
+    const h = this.hyperliquidStored();
+    if (!h || (!h.enabled && !opts.includeDisabled)) return null;
+    const { enabled: _enabled, ...creds } = h;
+    return creds;
+  }
+
   /** A stored key's value by env var (host-only: for live checks, never the renderer). */
   keyValue(envVar: string): string | null {
     return this.keysStored().find((k) => k.envVar === envVar)?.value ?? null;
@@ -156,6 +201,7 @@ export class VaultService implements IntegrationSource {
     return {
       robinhood: this.robinhoodEnabled(),
       kalshi: this.kalshiCredentials() !== null,
+      hyperliquid: this.hyperliquidCredentials() !== null,
       pmxt: this.keyValue(PMXT_KEY_ENV) !== null,
     };
   }
@@ -180,6 +226,19 @@ export class VaultService implements IntegrationSource {
     if (!v?.keyId || !v.privateKeyPem) return null;
     const env: KalshiEnv = v.env === "demo" ? "demo" : "prod";
     return { keyId: v.keyId, privateKeyPem: v.privateKeyPem, env, enabled: v.enabled !== false };
+  }
+
+  private hyperliquidStored(): StoredHyperliquid | null {
+    const v = this.read<Partial<StoredHyperliquid>>(K_HYPERLIQUID);
+    if (!v?.privateKey || !v.accountAddress) return null;
+    const env: HyperliquidEnv = v.env === "testnet" ? "testnet" : "mainnet";
+    return {
+      privateKey: v.privateKey,
+      accountAddress: v.accountAddress,
+      masterAddress: v.masterAddress ?? v.accountAddress,
+      env,
+      enabled: v.enabled !== false,
+    };
   }
 
   private keysStored(): StoredKey[] {

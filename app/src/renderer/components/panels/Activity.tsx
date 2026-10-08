@@ -6,6 +6,7 @@ import { ChevronRight, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useActivity } from "../../hooks/useActivity";
 import { useAgenticOrders, useLedgerReady, useRefreshOrders } from "../../hooks/useBroker";
+import { useHyperliquidOrders } from "../../hooks/useHyperliquid";
 import { useKalshiOrders } from "../../hooks/useKalshi";
 import {
   type ActivityGroup,
@@ -15,8 +16,15 @@ import {
   orderState,
 } from "../../lib/activity-groups";
 import { ago, num, signedUsd, usd } from "../../lib/format";
+import {
+  assignProtection,
+  parsedTrigger,
+  protectionNote,
+  protectionStage,
+  triggerAction,
+} from "../../lib/stops";
 import { cn } from "../../lib/utils";
-import { useUIStore } from "../../stores/ui";
+import { useUIStore, type Venue } from "../../stores/ui";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { PendingApprovals } from "./PendingApprovals";
@@ -36,10 +44,14 @@ export function Activity() {
   // OrderStatus.
   const rhOrders = useAgenticOrders();
   const kalshiOrders = useKalshiOrders();
+  const hlOrders = useHyperliquidOrders();
   const venue = useUIStore((s) => s.venue);
   // One join map across venues: Kalshi orders arrive in the same OrderStatus shape, so
   // an agent's Kalshi order gets its live fill state exactly like a Robinhood one.
-  const orders = useMemo(() => new Map([...rhOrders, ...kalshiOrders]), [rhOrders, kalshiOrders]);
+  const orders = useMemo(
+    () => new Map([...rhOrders, ...kalshiOrders, ...hlOrders]),
+    [rhOrders, kalshiOrders, hlOrders],
+  );
   const ledgerReady = useLedgerReady();
   const orderIdByApproval = useMemo(() => {
     const map = new Map<string, string>();
@@ -58,18 +70,35 @@ export function Activity() {
   // account. An order is "external" — not initiated here — when no approval claims
   // its id; those render as greyed, unexpandable rows.
   const claimed = useMemo(() => new Set(orderIdByApproval.values()), [orderIdByApproval]);
+  // A stop is its own order at the venue; fold each into the row of the entry it
+  // protects (and out of the list) so the buy shows its own stop-loss.
+  const protection = assignProtection(
+    groups.map((g) => {
+      const orderId = orderIdByApproval.get(g.key);
+      return {
+        key: g.key,
+        parsed: parsedOf(g),
+        status: orderId ? (orders.get(orderId) ?? null) : null,
+      };
+    }),
+    hlOrders.values(),
+  );
+  const folded = new Set([...protection.values()].flat().map((o) => o.id));
   const rows: Row[] = groups
     .filter((g) => venue === "all" || groupVenue(g) === venue)
+    .filter((g) => !folded.has(orderIdByApproval.get(g.key) ?? ""))
     .map((g) => ({ kind: "group", at: g.latest.at, group: g }));
   if (scope === "all") {
-    const external: [Map<string, OrderStatus>, "robinhood" | "kalshi"][] = [
+    const external: [Map<string, OrderStatus>, Exclude<Venue, "all">][] = [
       [rhOrders, "robinhood"],
       [kalshiOrders, "kalshi"],
+      [hlOrders, "hyperliquid"],
     ];
     for (const [map, v] of external) {
       if (venue !== "all" && venue !== v) continue;
       for (const o of map.values()) {
-        if (!claimed.has(o.id)) rows.push({ kind: "external", at: orderAt(o), status: o });
+        if (!claimed.has(o.id) && !folded.has(o.id))
+          rows.push({ kind: "external", at: orderAt(o), status: o });
       }
     }
   }
@@ -136,6 +165,7 @@ export function Activity() {
                 group={g}
                 status={orderId ? (orders.get(orderId) ?? null) : null}
                 orderId={orderId}
+                protection={protection.get(g.key) ?? NO_ORDERS}
                 now={now}
                 ledgerReady={ledgerReady}
                 showAgent={scope === "all"}
@@ -150,15 +180,23 @@ export function Activity() {
   );
 }
 
-/** Which venue an order group belongs to — Kalshi orders come from the `kalshi` MCP. */
-function groupVenue(group: ActivityGroup): "robinhood" | "kalshi" {
-  return group.entries.some((e) =>
-    String((e.payload as { toolName?: unknown } | null)?.toolName ?? "").startsWith(
-      "mcp__kalshi__",
-    ),
-  )
-    ? "kalshi"
-    : "robinhood";
+/** Which venue an order group belongs to, from the MCP server its tool came from. */
+function groupVenue(group: ActivityGroup): Exclude<Venue, "all"> {
+  const from = (prefix: string) =>
+    group.entries.some((e) =>
+      String((e.payload as { toolName?: unknown } | null)?.toolName ?? "").startsWith(prefix),
+    );
+  if (from("mcp__kalshi__")) return "kalshi";
+  if (from("mcp__hyperliquid__")) return "hyperliquid";
+  return "robinhood";
+}
+
+const NO_ORDERS: OrderStatus[] = [];
+
+/** The structured order a group was proposed as (from its `order_intent` entry). */
+function parsedOf(group: ActivityGroup): ParsedOrder | null {
+  const intent = group.entries.find((e) => e.kind === "order_intent");
+  return intent ? ((intent.payload as { parsed?: ParsedOrder } | null)?.parsed ?? null) : null;
 }
 
 /** Small uppercase section heading. */
@@ -206,6 +244,7 @@ function GroupRow({
   group,
   status,
   orderId,
+  protection,
   now,
   ledgerReady,
   showAgent,
@@ -215,6 +254,8 @@ function GroupRow({
   group: ActivityGroup;
   status: OrderStatus | null;
   orderId: string | null;
+  /** The stop-loss / take-profit orders placed with this entry (see lib/stops.ts). */
+  protection: OrderStatus[];
   now: number;
   ledgerReady: boolean;
   showAgent: boolean;
@@ -226,6 +267,9 @@ function GroupRow({
   const tone = toneForState(state, group);
   const view = headerView(group, status);
   const canExpand = group.entries.length > 1;
+  // The entry's stop, and — once it fires — that the position was sold because of it.
+  const fired = protection.some((o) => o.state === "filled");
+  const stopNote = protectionNote(parsedOf(group), protection);
 
   const header = (
     <div className="flex items-start gap-2 py-2 text-sm">
@@ -259,6 +303,16 @@ function GroupRow({
           </span>
           {view.breakdown && <span className="min-w-0 truncate text-right">{view.breakdown}</span>}
         </div>
+        {stopNote && (
+          <div
+            className={cn(
+              "mt-0.5 truncate text-[11px]",
+              fired ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {stopNote}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -274,7 +328,7 @@ function GroupRow({
       )}
       {canExpand && expanded && (
         <div className="mb-2 ml-5 flex flex-col">
-          {stagesFor(group, state).map((s, i, all) => (
+          {stagesFor(group, state, protection).map((s, i, all) => (
             <StageRow key={s.key} stage={s} isFirst={i === 0} isLast={i === all.length - 1} />
           ))}
         </div>
@@ -298,7 +352,7 @@ interface Stage {
  * synthesized "Order rejected by broker" closer so the list visibly ends in failure. The
  * synthetic stage is render-only; it is never persisted.
  */
-function stagesFor(group: ActivityGroup, state: OrderState): Stage[] {
+function stagesFor(group: ActivityGroup, state: OrderState, protection: OrderStatus[]): Stage[] {
   const stages: Stage[] = group.entries.map((e) => {
     const { label, tone } = describe(e);
     return { key: `e${e.id}`, label, tone, at: e.at };
@@ -312,6 +366,11 @@ function stagesFor(group: ActivityGroup, state: OrderState): Stage[] {
       tone: "bg-destructive",
       at: null,
     });
+  }
+  // What became of the entry's stop-loss / take-profit, read live from the venue.
+  for (const o of protection) {
+    const at = o.lastTransactionAt ? Date.parse(o.lastTransactionAt) : Number.NaN;
+    stages.push({ key: `stop-${o.id}`, ...protectionStage(o), at: Number.isNaN(at) ? null : at });
   }
   return stages;
 }
@@ -437,19 +496,28 @@ function executedNumbers(
  * (session events, cancels) fall back to the latest line.
  */
 function headerView(group: ActivityGroup, status: OrderStatus | null): HeaderView {
-  const intent = group.entries.find((e) => e.kind === "order_intent");
-  const parsed = intent
-    ? ((intent.payload as { parsed?: ParsedOrder } | null)?.parsed ?? null)
-    : null;
+  const parsed = parsedOf(group);
 
   if (parsed && parsed.kind === "place") {
     const isLimit = parsed.orderType === "limit" && parsed.limitPrice != null;
     // An option names its contract (`TLT $86C 11/20/26`) where an equity shows its symbol.
     const name = parsed.instrument ?? parsed.symbol ?? "?";
+    // A stop order is labelled as one — and, once filled, as the reason for the sale.
+    const trigger = parsedTrigger(parsed);
+    if (trigger) {
+      const primary = triggerAction(parsed.side, name, trigger, status?.state === "filled");
+      return { primary, ...executedNumbers(status, parsed.side ?? null) };
+    }
     const action = `${(parsed.side ?? "order").toUpperCase()} ${name} @ ${
       isLimit ? usd(parsed.limitPrice) : "Market"
     }`;
     return { primary: action, ...executedNumbers(status, parsed.side ?? null) };
+  }
+
+  // A non-order action (set leverage): say what it was, not just that it was accepted.
+  if (parsed?.kind === "unknown" && parsed.summary) {
+    const text = parsed.summary.replace(/^Hyperliquid: /, "");
+    return { primary: text.charAt(0).toUpperCase() + text.slice(1), total: null, breakdown: null };
   }
 
   return { primary: describe(group.latest).label, total: null, breakdown: null };
@@ -460,6 +528,10 @@ function externalView(status: OrderStatus): HeaderView {
   const isLimit = status.type === "limit" && status.limitPrice != null;
   const name =
     status.assetType === "option" ? legsLabel(status.legs ?? []) : (status.symbol ?? "?");
+  if (status.trigger) {
+    const primary = triggerAction(status.side, name, status.trigger, status.state === "filled");
+    return { primary, ...executedNumbers(status, status.side) };
+  }
   const action = `${(status.side ?? "order").toUpperCase()} ${name} @ ${
     isLimit ? usd(status.limitPrice) : "Market"
   }`;

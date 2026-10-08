@@ -12,7 +12,7 @@ import { IS_NIGHTLY } from "./app-identity";
 export const FEATURES = {
   /**
    * Key Vault + optional venues: Kalshi (reads + gated writes via the built-in
-   * `kalshi` MCP), PMXT market data, extra API keys as agent env vars, and Robinhood
+   * `kalshi` MCP), Hyperliquid (same, via `hyperliquid`), PMXT market data, extra API keys as agent env vars, and Robinhood
    * as an optional venue. Off → agents get Robinhood only, as before.
    */
   venues: IS_NIGHTLY,

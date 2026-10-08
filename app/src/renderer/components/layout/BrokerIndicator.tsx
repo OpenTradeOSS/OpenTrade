@@ -1,9 +1,10 @@
 import { FEATURES } from "@shared/feature-flags";
 import { KeyRound } from "lucide-react";
 import { useBrokerStatus } from "../../hooks/useBroker";
+import { useHyperliquidStatus } from "../../hooks/useHyperliquid";
 import { useKalshiStatus } from "../../hooks/useKalshi";
 import { cn } from "../../lib/utils";
-import { useUIStore } from "../../stores/ui";
+import { useUIStore, type Venue } from "../../stores/ui";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 const TONE: Record<string, string> = {
@@ -39,19 +40,21 @@ function RobinhoodIndicator() {
 }
 
 /**
- * Venue connection status for the right pane footer — Robinhood and Kalshi side by
- * side — plus a shortcut into the Key Vault, where both are set up. Clicking a venue
+ * Venue connection status for the right pane footer — Robinhood, Kalshi and Hyperliquid
+ * side by side — plus a shortcut into the Key Vault, where they are set up. Clicking a venue
  * switches the panel to it (or opens the vault when it isn't set up).
  */
 function VenueIndicator() {
   const rh = useBrokerStatus()?.status ?? "disconnected";
   const kalshi = useKalshiStatus();
   const k = kalshi?.state ?? "off";
+  const hyperliquid = useHyperliquidStatus();
+  const h = hyperliquid?.state ?? "off";
   const setVenue = useUIStore((s) => s.setVenue);
   const setRightTab = useUIStore((s) => s.setRightTab);
   const setView = useUIStore((s) => s.setView);
 
-  const show = (venue: "robinhood" | "kalshi") => {
+  const show = (venue: Venue) => {
     setVenue(venue);
     setRightTab("portfolio");
   };
@@ -73,6 +76,15 @@ function VenueIndicator() {
           ? `Kalshi error: ${kalshi?.message ?? "request failed"}`
           : "Kalshi not set up";
 
+  const hLabel =
+    h === "connected"
+      ? `Hyperliquid connected${hyperliquid?.env === "testnet" ? " (testnet)" : ""}`
+      : h === "connecting"
+        ? "Hyperliquid connecting…"
+        : h === "error"
+          ? `Hyperliquid error: ${hyperliquid?.message ?? "request failed"}`
+          : "Hyperliquid not set up";
+
   return (
     <div className="flex min-w-0 items-center gap-3 text-sm text-muted-foreground">
       <Dot tone={TONE[rh]} label="Robinhood" title={rhLabel} onClick={() => show("robinhood")} />
@@ -81,6 +93,12 @@ function VenueIndicator() {
         label="Kalshi"
         title={kLabel}
         onClick={() => (k === "off" ? setView("vault") : show("kalshi"))}
+      />
+      <Dot
+        tone={TONE[h]}
+        label="Hyperliquid"
+        title={hLabel}
+        onClick={() => (h === "off" ? setView("vault") : show("hyperliquid"))}
       />
       <Tooltip>
         <TooltipTrigger asChild>

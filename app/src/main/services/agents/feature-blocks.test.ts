@@ -38,6 +38,7 @@ describe("agent instruction prefixes", () => {
       const out = applyFeatureBlocks(raw, { venues: false });
       expect(out).not.toContain("Key Vault");
       expect(out).not.toContain("Kalshi");
+      expect(out).not.toContain("Hyperliquid");
       expect(out).not.toContain("<!--");
       expect(out).toContain("Robinhood MCP is your only source of truth");
     });

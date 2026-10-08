@@ -10,6 +10,11 @@ import { cn } from "../../lib/utils";
 import { type PositionsMetric, useUIStore } from "../../stores/ui";
 import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import {
+  HyperliquidHoldings,
+  HyperliquidPortfolioView,
+  useHyperliquidTotal,
+} from "./HyperliquidPortfolio";
 import { KalshiHoldings, KalshiPortfolioView, useKalshiTotal } from "./KalshiPortfolio";
 import { VenueSwitch } from "./VenueSwitch";
 
@@ -17,7 +22,7 @@ import { VenueSwitch } from "./VenueSwitch";
 export const MASK = "****";
 
 /**
- * The Portfolio tab: an All / Robinhood / Kalshi switch over the account views. "All"
+ * The Portfolio tab: an All / Robinhood / Kalshi / Hyperliquid switch over the account views. "All"
  * sums the venues into one total, then lists every venue's holdings.
  */
 export function Portfolio() {
@@ -33,8 +38,10 @@ export function Portfolio() {
         <AllPortfolio />
       ) : venue === "robinhood" ? (
         <RobinhoodPortfolio />
-      ) : (
+      ) : venue === "kalshi" ? (
         <KalshiPortfolioView />
+      ) : (
+        <HyperliquidPortfolioView />
       )}
     </div>
   );
@@ -427,15 +434,18 @@ function AllPortfolio() {
   const rh = useBrokerStatus();
   const data = useBrokerData();
   const kalshi = useKalshiTotal();
+  const hl = useHyperliquidTotal();
   const setVenue = useUIStore((s) => s.setVenue);
   const balancesHidden = useUIStore((s) => s.balancesHidden);
   const toggleBalances = useUIStore((s) => s.toggleBalances);
 
   const rhConnected = rh?.status === "connected";
   const rhValue = rhConnected ? (data.portfolio?.value.equity ?? null) : null;
-  const parts = [rhValue, kalshi.connected ? kalshi.total : null].filter(
-    (v): v is number => v !== null,
-  );
+  const parts = [
+    rhValue,
+    kalshi.connected ? kalshi.total : null,
+    hl.connected ? hl.total : null,
+  ].filter((v): v is number => v !== null);
   const total = parts.length ? parts.reduce((a, b) => a + b, 0) : null;
 
   const venueRow = (label: string, value: number | null, state: string, onClick: () => void) => (
@@ -494,10 +504,12 @@ function AllPortfolio() {
           {venueRow("Kalshi · agent positions", kalshi.total, kalshi.state, () =>
             setVenue("kalshi"),
           )}
+          {venueRow("Hyperliquid", hl.total, hl.state, () => setVenue("hyperliquid"))}
         </div>
       </div>
       <RobinhoodPortfolio holdingsOnly />
       <KalshiHoldings />
+      <HyperliquidHoldings />
     </div>
   );
 }

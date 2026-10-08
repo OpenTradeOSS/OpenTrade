@@ -5,9 +5,10 @@ const VENUES: { id: Venue; label: string }[] = [
   { id: "all", label: "All" },
   { id: "robinhood", label: "Robinhood" },
   { id: "kalshi", label: "Kalshi" },
+  { id: "hyperliquid", label: "Hyperliquid" },
 ];
 
-/** All / Robinhood / Kalshi — one selection shared by the Portfolio and Activity tabs. */
+/** All / Robinhood / Kalshi / Hyperliquid — one selection shared by the Portfolio and Activity tabs. */
 export function VenueSwitch() {
   const venue = useUIStore((s) => s.venue);
   const setVenue = useUIStore((s) => s.setVenue);
@@ -22,7 +23,7 @@ export function VenueSwitch() {
         <ToggleGroupItem
           key={v.id}
           value={v.id}
-          className="flex-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground data-[state=on]:bg-muted data-[state=on]:font-medium data-[state=on]:text-foreground"
+          className="flex-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground data-[state=on]:bg-muted data-[state=on]:font-medium data-[state=on]:text-foreground"
         >
           {v.label}
         </ToggleGroupItem>

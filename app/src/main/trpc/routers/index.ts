@@ -5,6 +5,7 @@ import { analyticsRouter } from "./analytics";
 import { approvalsRouter } from "./approvals";
 import { brokerRouter } from "./broker";
 import { feedbackRouter } from "./feedback";
+import { hyperliquidRouter } from "./hyperliquid";
 import { kalshiRouter } from "./kalshi";
 import { notificationsRouter } from "./notifications";
 import { onboardingRouter } from "./onboarding";
@@ -29,6 +30,7 @@ export const appRouter = router({
   notifications: notificationsRouter,
   vault: vaultRouter,
   kalshi: kalshiRouter,
+  hyperliquid: hyperliquidRouter,
 });
 
 export type AppRouter = typeof appRouter;

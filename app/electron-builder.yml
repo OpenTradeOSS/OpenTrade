@@ -21,6 +21,7 @@ files:
 asarUnpack:
   - out/main/agent-mcp.js
   - out/main/kalshi-mcp.js
+  - out/main/hyperliquid-mcp.js
   # Code shared between entries (the MCP runtime, the Kalshi tool table) is split into
   # out/main/chunks/ by rollup; the unpacked MCP servers `require("./chunks/…")`, so the
   # chunks must be unpacked beside them (asar redirects the host's own reads).

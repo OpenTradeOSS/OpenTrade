@@ -31,7 +31,7 @@ const STEP_LABELS: Record<Step, string> = {
 /**
  * First-run wizard. Confirm an agent CLI (Claude Code / Codex) is installed, connect Robinhood
  * (optional; the panel degrades without it), add optional venue/data keys to the Key
- * Vault (Kalshi, PMXT — also reachable later from the sidebar), show a quick feature
+ * Vault (Kalshi, Hyperliquid, PMXT — also reachable later from the sidebar), show a quick feature
  * showcase, then create the first agent. Finishing (or skipping the last step) persists
  * `onboardingComplete`, which is what App.tsx gates on.
  */
@@ -208,7 +208,7 @@ function BrokerStep({ onNext }: { onNext: () => void }) {
           OpenTrade keeps its own read-only Robinhood MCP session to power the portfolio panel. This
           opens a browser for a one-time login.
           {FEATURES.venues &&
-            " Optional: skip it if you only trade Kalshi, and turn Robinhood off for agents in the next step."}
+            " Optional: skip it if you only trade Kalshi or Hyperliquid, and turn Robinhood off for agents in the next step."}
         </p>
       </div>
 
@@ -352,9 +352,10 @@ function VaultStep({ onNext }: { onNext: () => void }) {
       <div>
         <h2 className="text-sm font-medium">Key Vault</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Add the venues and data your agents can use. Kalshi lets agents trade event contracts
-          (orders still need your approval), and PMXT gives them read-only prediction-market data.
-          All optional; you can change this any time from Key Vault in the sidebar.
+          Add the venues and data your agents can use. Kalshi lets agents trade event contracts and
+          Hyperliquid perps and spot crypto (orders still need your approval), and PMXT gives them
+          read-only prediction-market data. All optional; you can change this any time from Key
+          Vault in the sidebar.
         </p>
       </div>
 

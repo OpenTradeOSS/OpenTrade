@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { Agent } from "@shared/agent";
 import type { Approval } from "@shared/approval";
 import type { BrokerConnectionStatus } from "@shared/broker";
+import type { HyperliquidStatus } from "@shared/hyperliquid";
 import type { KalshiStatus } from "@shared/kalshi";
 import type { HostNotification, RecentNotification } from "@shared/notify";
 import type { AppSettings } from "@shared/settings";
@@ -21,6 +22,10 @@ export interface AppEvents {
   "kalshi:updated": { at: number };
   /** Kalshi connection state changed (drives the "Kalshi connected" indicator). */
   "kalshi:status": KalshiStatus;
+  /** The Hyperliquid account view (portfolio/orders) was refreshed. */
+  "hyperliquid:updated": { at: number };
+  /** Hyperliquid connection state changed. */
+  "hyperliquid:status": HyperliquidStatus;
   "broker:updated": { keys: string[] };
   "broker:status": { status: BrokerConnectionStatus };
   /** A dead session was auto-restarted (fresh `claude`); renderer should reattach. */

@@ -11,6 +11,7 @@ import type { WakeTransport } from "../services/scheduler/wake/types";
 import type { SettingsService } from "../services/settings";
 import type { TerminalService } from "../services/terminal";
 import type { VaultService } from "../services/vault";
+import type { HyperliquidService } from "../services/venues/hyperliquid";
 import type { KalshiService } from "../services/venues/kalshi";
 
 export interface Context {
@@ -28,6 +29,7 @@ export interface Context {
   /** Key Vault: venue credentials + integration switches. */
   vault: VaultService;
   kalshi: KalshiService;
+  hyperliquid: HyperliquidService;
 }
 
 const t = initTRPC.context<Context>().create({ transformer: superjson });

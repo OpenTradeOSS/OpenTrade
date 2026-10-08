@@ -16,8 +16,8 @@ import { claudeSettingsJson } from "./claude";
 import { integrationServersToml, vaultShellEnvToml } from "./codex";
 import { claudeMcpServers, writeClaudeMcpJson } from "./integrations-config";
 
-const ALL = { robinhood: true, kalshi: true, pmxt: true };
-const NONE = { robinhood: false, kalshi: false, pmxt: false };
+const ALL = { robinhood: true, kalshi: true, hyperliquid: true, pmxt: true };
+const NONE = { robinhood: false, kalshi: false, hyperliquid: false, pmxt: false };
 
 function memVault(): VaultService {
   const sqlite = new Database(":memory:");
@@ -46,11 +46,18 @@ describe("claude config per integration", () => {
 
   test("all on: kalshi allowed (gated host-side), PMXT writes denied, key referenced not embedded", () => {
     const servers = claudeMcpServers(ALL) as Record<string, { headers?: Record<string, string> }>;
-    expect(Object.keys(servers)).toEqual(["robinhood", "kalshi", "pmxt", "opentrade"]);
+    expect(Object.keys(servers)).toEqual([
+      "robinhood",
+      "kalshi",
+      "hyperliquid",
+      "pmxt",
+      "opentrade",
+    ]);
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal `${VAR}` Claude Code expands
     expect(servers.pmxt.headers?.Authorization).toBe("Bearer ${PMXT_API_KEY}");
     const s = JSON.parse(claudeSettingsJson(ALL));
     expect(s.permissions.allow).toContain("mcp__kalshi__*");
+    expect(s.permissions.allow).toContain("mcp__hyperliquid__*");
     expect(s.permissions.deny).toContain("mcp__pmxt__createOrder");
     expect(s.permissions.deny).toContain("mcp__pmxt__submitOrder");
   });
@@ -64,7 +71,7 @@ describe("claude config per integration", () => {
           mcpServers: { mine: { command: "x" }, robinhood: { type: "http", url: "u" } },
         }),
       );
-      writeClaudeMcpJson(dir, { robinhood: false, kalshi: true, pmxt: false });
+      writeClaudeMcpJson(dir, { robinhood: false, kalshi: true, hyperliquid: false, pmxt: false });
       const cfg = JSON.parse(readFileSync(join(dir, ".mcp.json"), "utf8"));
       expect(Object.keys(cfg.mcpServers).sort()).toEqual(["kalshi", "mine", "opentrade"]);
     } finally {
@@ -75,7 +82,10 @@ describe("claude config per integration", () => {
 
 describe("codex config per integration", () => {
   test("robinhood keeps its per-tool prompt anchor; others are absent when off", () => {
-    const toml = integrationServersToml({ robinhood: true, kalshi: false, pmxt: false }, "a1");
+    const toml = integrationServersToml(
+      { robinhood: true, kalshi: false, hyperliquid: false, pmxt: false },
+      "a1",
+    );
     expect(toml).toContain("[mcp_servers.robinhood]");
     expect(toml).toContain(
       '[mcp_servers.robinhood.tools.place_equity_order]\napproval_mode = "prompt"',
@@ -85,7 +95,10 @@ describe("codex config per integration", () => {
   });
 
   test("kalshi + pmxt: long tool timeout, bearer env var, disabled PMXT writes, no secret", () => {
-    const toml = integrationServersToml({ robinhood: false, kalshi: true, pmxt: true }, "a1");
+    const toml = integrationServersToml(
+      { robinhood: false, kalshi: true, hyperliquid: false, pmxt: true },
+      "a1",
+    );
     expect(toml).not.toContain("[mcp_servers.robinhood]");
     expect(toml).toContain("[mcp_servers.kalshi]");
     expect(toml).toContain("tool_timeout_sec = 3700");
@@ -166,7 +179,12 @@ describe("VaultService", () => {
     const v = memVault();
     v.saveKalshi({ keyId: "k", privateKeyPem: PEM, env: "prod" });
     v.setEnabled("robinhood", false);
-    expect(v.agentIntegrations()).toEqual({ robinhood: false, kalshi: true, pmxt: false });
+    expect(v.agentIntegrations()).toEqual({
+      robinhood: false,
+      kalshi: true,
+      hyperliquid: false,
+      pmxt: false,
+    });
     // Switching env keeps the stored key when no new PEM is pasted.
     v.saveKalshi({ keyId: "k", env: "demo" });
     expect(v.kalshiCredentials()?.env).toBe("demo");

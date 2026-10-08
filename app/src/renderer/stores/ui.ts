@@ -4,7 +4,7 @@ export type RightTab = "portfolio" | "activity" | "monitor";
 /** What the Portfolio tables' last column shows. Cycled by clicking the column header. */
 export type PositionsMetric = "pnl" | "pct" | "value";
 /** Which venue the right panel's Portfolio + Activity tabs show. Session-only. */
-export type Venue = "all" | "robinhood" | "kalshi";
+export type Venue = "all" | "robinhood" | "kalshi" | "hyperliquid";
 /** Top-level pane: the agent workspace, a full-screen Scheduled / Key Vault view, or Settings. */
 export type AppView = "agents" | "scheduled" | "vault" | "settings";
 

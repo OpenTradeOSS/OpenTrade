@@ -20,6 +20,16 @@ import { integrationEnv } from "../integrations";
  * entries reference by name) is layered in here — the single choke point every agent
  * spawn (PTY, headless wake, codex app-server) goes through.
  */
+/**
+ * Variables an agent CLI sets for ITS OWN children. If OpenTrade itself was started from
+ * inside an agent session (`open OpenTrade.app` from a Claude Code or Codex terminal —
+ * macOS hands the caller's env to the app), they would be inherited by every agent and
+ * make each one believe it is a sub-session of that outer session: Claude Code then
+ * skips writing the agent's transcript, so its conversation can't be resumed.
+ */
+const PARENT_SESSION_ENV =
+  /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|CLAUDE_CODE_(SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|ENTRYPOINT|EXECPATH|MESSAGING_\w+)|CODEX_COMPANION_\w+)$/;
+
 export function buildAgentEnv(
   agentId: string,
   extra?: Record<string, string>,
@@ -27,7 +37,7 @@ export function buildAgentEnv(
 ): Record<string, string> {
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === "string") base[k] = v;
+    if (typeof v === "string" && !PARENT_SESSION_ENV.test(k)) base[k] = v;
   }
 
   for (const key of opts?.stripEnvKeys ?? []) delete base[key];

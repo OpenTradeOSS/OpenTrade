@@ -5,6 +5,7 @@ import {
   type OptionLeg,
   STANDARD_MULTIPLIER,
 } from "@shared/options";
+import { isHyperliquidTool, parseHyperliquidOrderInput } from "./parse-hyperliquid";
 import { isKalshiTool, parseKalshiOrderInput } from "./parse-kalshi";
 
 /**
@@ -16,6 +17,7 @@ import { isKalshiTool, parseKalshiOrderInput } from "./parse-kalshi";
 export function parseOrderInput(toolName: string, input: unknown): ParsedOrder {
   // Kalshi orders come from OpenTrade's own `kalshi` server with an exact schema.
   if (isKalshiTool(toolName)) return parseKalshiOrderInput(toolName, input);
+  if (isHyperliquidTool(toolName)) return parseHyperliquidOrderInput(toolName, input);
   const o = (input ?? {}) as Record<string, unknown>;
   // Exercise first: `cancel_option_exercise` would otherwise trip the generic
   // cancel branch, which expects an order_id it doesn't have (it targets an

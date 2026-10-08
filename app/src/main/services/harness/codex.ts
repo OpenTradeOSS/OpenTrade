@@ -19,7 +19,12 @@ import { GATED_TOOL_MATCHER, GATED_TOOLS } from "@shared/robinhood-tools";
 import { type AgentIntegrations, KEY_NAMES_ENV, PMXT_KEY_ENV } from "@shared/vault";
 import { OPENTRADE_HOME } from "../../db/client";
 import { hostLog } from "../../host/log";
-import { resolveAgentMcp, resolveHooksDir, resolveKalshiMcp } from "../agents/paths";
+import {
+  resolveAgentMcp,
+  resolveHooksDir,
+  resolveHyperliquidMcp,
+  resolveKalshiMcp,
+} from "../agents/paths";
 import { bus } from "../event-bus";
 import { agentIntegrations, integrationEnv } from "../integrations";
 import { type CodexAppServerManager, codexHomeFor } from "./codex-app-server";
@@ -397,6 +402,19 @@ default_tools_approval_mode = "approve"
 tool_timeout_sec = 3700
 
 [mcp_servers.kalshi.env]
+ELECTRON_RUN_AS_NODE = "1"
+OPENTRADE_HOME = ${JSON.stringify(OPENTRADE_HOME)}
+OPENTRADE_AGENT_ID = ${JSON.stringify(agentId)}
+`);
+  }
+  if (on.hyperliquid) {
+    parts.push(`[mcp_servers.hyperliquid]
+command = ${JSON.stringify(process.execPath)}
+args = [${JSON.stringify(resolveHyperliquidMcp())}]
+default_tools_approval_mode = "approve"
+tool_timeout_sec = 3700
+
+[mcp_servers.hyperliquid.env]
 ELECTRON_RUN_AS_NODE = "1"
 OPENTRADE_HOME = ${JSON.stringify(OPENTRADE_HOME)}
 OPENTRADE_AGENT_ID = ${JSON.stringify(agentId)}

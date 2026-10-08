@@ -9,6 +9,9 @@ import { z } from "zod";
  *    - `kalshi` — Kalshi event contracts, reads + writes, through OpenTrade's own
  *      `kalshi` MCP server. The host holds the key and signs every request; order writes
  *      pass the same approval gate as Robinhood orders.
+ *    - `hyperliquid` — Hyperliquid perps + spot, through OpenTrade's own `hyperliquid`
+ *      MCP server. The host holds an API (agent) wallet key — one that can trade but
+ *      never withdraw — signs every action with it, and gates every write.
  *  - **API keys** (any number, just a name + a value): each is handed to every agent as
  *    an environment variable (`PMXT` → `PMXT_API_KEY`). A few names are recognized and
  *    wired further — `PMXT_API_KEY` also connects PMXT's hosted, read-only MCP.
@@ -17,7 +20,7 @@ import { z } from "zod";
  * `writeConfig` step + `buildAgentEnv`), so a change applies the next time an agent
  * starts.
  */
-export const IntegrationId = z.enum(["robinhood", "kalshi"]);
+export const IntegrationId = z.enum(["robinhood", "kalshi", "hyperliquid"]);
 export type IntegrationId = z.infer<typeof IntegrationId>;
 
 /** Env var PMXT's key is recognized by (agents' PMXT MCP entries reference it by name). */
@@ -29,10 +32,14 @@ export const KEY_NAMES_ENV = "OPENTRADE_KEYS";
 export const KalshiEnv = z.enum(["prod", "demo"]);
 export type KalshiEnv = z.infer<typeof KalshiEnv>;
 
+export const HyperliquidEnv = z.enum(["mainnet", "testnet"]);
+export type HyperliquidEnv = z.infer<typeof HyperliquidEnv>;
+
 /** What the harness wires into each agent. `true` = present and switched on. */
 export interface AgentIntegrations {
   robinhood: boolean;
   kalshi: boolean;
+  hyperliquid: boolean;
   pmxt: boolean;
 }
 
@@ -40,6 +47,7 @@ export interface AgentIntegrations {
 export const DEFAULT_AGENT_INTEGRATIONS: AgentIntegrations = {
   robinhood: true,
   kalshi: false,
+  hyperliquid: false,
   pmxt: false,
 };
 
@@ -50,6 +58,32 @@ export const SaveKalshiInput = z.object({
   env: KalshiEnv,
 });
 export type SaveKalshiInput = z.infer<typeof SaveKalshiInput>;
+
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+export const SaveHyperliquidInput = z.object({
+  /**
+   * The API (agent) wallet's private key: 32 bytes of hex, `0x` optional. Created at
+   * app.hyperliquid.xyz/API; it can trade for the account but not withdraw. Omit to
+   * keep the stored one (e.g. switching mainnet/testnet).
+   */
+  privateKey: z
+    .string()
+    .trim()
+    .regex(/^(0x)?[0-9a-fA-F]{64}$/, "A private key is 64 hex characters.")
+    .optional(),
+  /**
+   * The account the wallet trades for (the main wallet address, or a sub-account /
+   * vault). Optional: Hyperliquid reports which account approved an API wallet.
+   */
+  accountAddress: z
+    .string()
+    .trim()
+    .regex(EVM_ADDRESS, "An address is 0x + 40 hex characters.")
+    .optional(),
+  env: HyperliquidEnv,
+});
+export type SaveHyperliquidInput = z.infer<typeof SaveHyperliquidInput>;
 
 export const SaveKeyInput = z.object({
   /** Human name, e.g. "PMXT" or "News API". Drives the env var (see `envVarFor`). */
@@ -98,6 +132,15 @@ export interface VaultStatus {
     enabled: boolean;
     env: KalshiEnv;
     keyIdHint: string | null;
+  };
+  hyperliquid: {
+    configured: boolean;
+    enabled: boolean;
+    env: HyperliquidEnv;
+    /** The account traded (public). */
+    account: string | null;
+    /** The API wallet's address (public) — what the user approved on Hyperliquid. */
+    apiWallet: string | null;
   };
   keys: VaultKey[];
 }

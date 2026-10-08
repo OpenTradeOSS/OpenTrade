@@ -15,7 +15,9 @@ export default defineConfig({
     // ELECTRON_RUN_AS_NODE child resolving a bundled dep avoids the asar/runtime-
     // require fragility that bites native modules. node-pty stays externalized
     // (native, ABI-rebuilt).
-    plugins: [externalizeDepsPlugin({ exclude: ["ws", "posthog-node"] })],
+    plugins: [
+      externalizeDepsPlugin({ exclude: ["ws", "posthog-node", "@nktkas/hyperliquid", "viem"] }),
+    ],
     define,
     resolve: {
       alias: {
@@ -46,6 +48,9 @@ export default defineConfig({
           // `/kalshi/call` (host signs with the vault key and gates writes). Same
           // self-contained constraints as agent-mcp.
           "kalshi-mcp": resolve("src/agent-mcp/kalshi.ts"),
+          // Per-agent Hyperliquid MCP server (`hyperliquid`): the same shim over
+          // `/hyperliquid/call`.
+          "hyperliquid-mcp": resolve("src/agent-mcp/hyperliquid.ts"),
         },
       },
     },
