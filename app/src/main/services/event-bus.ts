@@ -14,6 +14,8 @@ export interface AppEvents {
   /** An agent was archived — harness runtimes (codex app-server) shut down. */
   "agent:archived": { agentId: string };
   "system:tick": { at: number };
+  /** Hosted only: a URL the user must open (e.g. broker consent); the web app shows it. */
+  "system:open-url": { url: string; purpose: string };
   /** Global settings changed; live consumers (broker poller, renderer) re-read. */
   "settings:changed": AppSettings;
   /** Key Vault credentials or integration switches changed (applies on next agent launch). */

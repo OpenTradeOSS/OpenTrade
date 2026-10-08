@@ -13,7 +13,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { GATED_TOOL_MATCHER } from "@shared/robinhood-tools";
 import type { AgentIntegrations } from "@shared/vault";
+import { IS_HOSTED } from "../../host/hosted";
 import { resolveHooksDir } from "../agents/paths";
+import { trustClaudeProject } from "../claude-config";
 import { agentIntegrations } from "../integrations";
 import {
   claudeAllow,
@@ -144,6 +146,7 @@ export const claudeHarness: Harness = {
     // so a switch flipped in the vault applies on the next launch).
     const on = agentIntegrations();
     writeClaudeMcpJson(agentDir, on);
+    if (IS_HOSTED) trustClaudeProject(agentDir);
     // Generate the order-gate config in the agent's OWN .claude folder (project-scoped;
     // never the user's global ~/.claude). Runs at scaffold AND before every spawn, so it
     // heals agents that a clean CI build created without the (untracked) template
