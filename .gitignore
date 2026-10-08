@@ -30,3 +30,11 @@ dev.sh
 .env.example
 
 /scripts/
+.rudder/
+.rudder-workspaces/
+.rudder-worktrees/
+RUDDER.md
+DECISIONS.md
+RUDDER_SHARED.md
+PRE_ARCHITECTURE.md
+ARCHITECTURE.md

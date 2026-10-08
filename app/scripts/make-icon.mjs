@@ -6,5 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const r = spawnSync("python3", [join(here, "make-icon.py"), ...process.argv.slice(2)], { stdio: "inherit" });
+const r = spawnSync("python3", [join(here, "make-icon.py"), ...process.argv.slice(2)], {
+  stdio: "inherit",
+});
 process.exit(r.status ?? 1);
