@@ -15,6 +15,11 @@ export async function loadToken(): Promise<string | null> {
   return token;
 }
 
+/** Adopt an existing session token (screenshot runs). */
+export async function adoptSessionToken(t: string): Promise<void> {
+  await saveToken(t);
+}
+
 async function saveToken(t: string | null): Promise<void> {
   token = t;
   if (t) await SecureStore.setItemAsync(TOKEN_KEY, t);

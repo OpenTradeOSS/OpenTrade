@@ -2,7 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import { loadToken, setSignedOutHandler } from "./src/api";
+import { adoptSessionToken, loadToken, setSignedOutHandler } from "./src/api";
 import { usePoll } from "./src/hooks";
 import { enablePush, onNotificationTap } from "./src/push";
 import { AccountScreen } from "./src/screens/Account";
@@ -54,8 +54,11 @@ function PendingBadge() {
   );
 }
 
+// Screenshot runs only (see README): start on a given tab. Unset in every build.
+const START_TAB = (process.env.EXPO_PUBLIC_SCREENSHOT_TAB as Tab | undefined) ?? "approvals";
+
 function Main({ onSignedOut }: { onSignedOut: () => void }) {
-  const [tab, setTab] = useState<Tab>("approvals");
+  const [tab, setTab] = useState<Tab>(START_TAB);
 
   useEffect(() => {
     // Ask for notification permission once signed in; a tap on an order alert opens Approvals.
@@ -109,7 +112,15 @@ export default function App() {
 
   useEffect(() => {
     setSignedOutHandler(() => setState("signedOut"));
-    loadToken().then((t) => setState(t ? "signedIn" : "signedOut"));
+    loadToken().then(async (t) => {
+      // Screenshot runs only: sign in with a session token from the environment.
+      const preset = process.env.EXPO_PUBLIC_SCREENSHOT_SESSION;
+      if (!t && preset) {
+        await adoptSessionToken(preset);
+        t = preset;
+      }
+      setState(t ? "signedIn" : "signedOut");
+    });
   }, []);
 
   return (
