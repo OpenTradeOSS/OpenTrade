@@ -2,3 +2,6 @@
 # Points OPENTRADE_HOME at a throwaway dir before any module captures it, so the suite
 # cannot write into the user's real ~/.opentrade. See test-setup.ts.
 preload = ["./test-setup.ts"]
+# The Expo app (mobile/) has its own toolchain; walking its node_modules and generated
+# ios/Pods exhausts file descriptors and breaks tests that spawn processes.
+pathIgnorePatterns = ["mobile/**"]
