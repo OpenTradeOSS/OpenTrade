@@ -1,7 +1,5 @@
-import { FEATURES } from "@shared/feature-flags";
 import { NewAgentDialog } from "./components/agents/NewAgentDialog";
 import { AgentSidebar } from "./components/layout/AgentSidebar";
-import { MobileShell, useIsNarrow } from "./components/layout/MobileShell";
 import { RightPanel } from "./components/layout/RightPanel";
 import { TerminalPane } from "./components/terminal/TerminalPane";
 import { useAgents } from "./hooks/useAgents";
@@ -10,9 +8,7 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { useShellSelection } from "./lib/shell";
 import { backendStarted } from "./lib/trpc";
 import { cn } from "./lib/utils";
-import { IS_WEB } from "./lib/web";
 import { BackendFailed } from "./screens/BackendFailed";
-import { KeyVaultScreen } from "./screens/KeyVault";
 import { Onboarding } from "./screens/Onboarding";
 import { ScheduledScreen } from "./screens/Scheduled";
 import { SettingsScreen } from "./screens/Settings";
@@ -27,7 +23,6 @@ export function App() {
   const settings = useSettings();
   const openNewAgent = useUIStore((s) => s.openNewAgent);
   const backendConnected = useConnectionStore((s) => s.backendConnected);
-  const narrow = useIsNarrow();
 
   // ⌘T opens the New Agent configuration dialog (create happens from the form).
   // Gated off while the backend is down to match the disabled New Agent button.
@@ -45,16 +40,6 @@ export function App() {
   if (!settings.data) return <div className="h-full w-full bg-background" />;
   if (!settings.data.onboardingComplete) return <Onboarding />;
 
-  // OpenTrade Cloud on a phone: a single-column shell instead of the three panes.
-  if (IS_WEB && narrow) {
-    return (
-      <>
-        <MobileShell />
-        <NewAgentDialog />
-      </>
-    );
-  }
-
   // The agent panes stay mounted (just hidden) while Settings is open so the live
   // terminal/WebSocket survives the switch — see lib/terminal/session-controller.
   return (
@@ -66,7 +51,6 @@ export function App() {
           <RightPanel />
         </div>
         {view === "scheduled" && <ScheduledScreen />}
-        {FEATURES.venues && view === "vault" && <KeyVaultScreen />}
         {view === "settings" && <SettingsScreen />}
       </div>
       <NewAgentDialog />

@@ -1,16 +1,13 @@
-import { APP_DISPLAY_NAME } from "@shared/app-identity";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { HostedOpenUrl } from "./components/layout/HostedLinks";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { installRendererErrorReporter } from "./lib/error-reporter";
 import { trpc, trpcClient } from "./lib/trpc";
 import "./styles/globals.css";
 
 installRendererErrorReporter();
-document.title = APP_DISPLAY_NAME;
 
 function Root() {
   const [queryClient] = useState(() => new QueryClient());
@@ -20,7 +17,6 @@ function Root() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <App />
-          <HostedOpenUrl />
         </TooltipProvider>
       </QueryClientProvider>
     </trpc.Provider>

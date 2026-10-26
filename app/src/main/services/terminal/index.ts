@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { Agent, ExecutionState } from "@shared/agent";
-import { IS_HOSTED } from "../../host/hosted";
 import { TerminalWsServer } from "../../pty-daemon/ws-server";
 import { buildTerminalWsUrl } from "../../pty-daemon/ws-url";
 import type { AgentRegistry } from "../agents/registry";
@@ -88,11 +87,6 @@ export class TerminalService {
   /** Bring up the terminal WebSocket data plane (called once by the host). */
   async start(): Promise<void> {
     await this.wsServer.listen();
-  }
-
-  /** Loopback port of the terminal data plane (the hosted edge proxies to it). */
-  get wsPort(): number {
-    return this.wsServer.port;
   }
 
   /**
@@ -309,10 +303,8 @@ export class TerminalService {
 
   /** The WebSocket URL the renderer connects to for this agent's live terminal. */
   async wsEndpointFor(agentId: string): Promise<string> {
-    // Opaque to the renderer by contract. Hosted (OpenTrade Cloud), the browser reaches
-    // the data plane through the gateway and the sandbox edge, which adds the token, so
-    // the URL is a same-origin path the renderer resolves against its own origin.
-    if (IS_HOSTED) return `/sessions/${encodeURIComponent(agentId)}?replay=1`;
+    // Opaque to the renderer by contract — a future cloud host returns a
+    // different URL (wss://…) and the renderer transport is unchanged.
     return buildTerminalWsUrl(
       `ws://127.0.0.1:${this.wsServer.port}`,
       agentId,

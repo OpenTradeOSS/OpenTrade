@@ -1,7 +1,5 @@
 import type { Agent } from "@shared/agent";
-import { APP_DISPLAY_NAME } from "@shared/app-identity";
-import { FEATURES } from "@shared/feature-flags";
-import { CalendarClock, KeyRound, Loader2, Plus, Settings, X } from "lucide-react";
+import { CalendarClock, Loader2, Plus, Settings, X } from "lucide-react";
 import { type CSSProperties, useEffect, useState } from "react";
 import { useAgents } from "../../hooks/useAgents";
 import { trpc } from "../../lib/trpc";
@@ -10,7 +8,6 @@ import { useConnectionStore } from "../../stores/connection";
 import { useUIStore } from "../../stores/ui";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Separator } from "../ui/separator";
-import { HostedLinks } from "./HostedLinks";
 import { StatusDot } from "./StatusDot";
 import { UpdateButton } from "./UpdateButton";
 
@@ -54,7 +51,7 @@ export function AgentSidebar() {
       {/* Top section: brand + new agent */}
       <div className="px-3 pb-2 pt-1">
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          {APP_DISPLAY_NAME}
+          OpenTrade
         </span>
       </div>
       <div className="flex flex-col gap-1 px-2 pb-2">
@@ -72,22 +69,6 @@ export function AgentSidebar() {
         >
           <CalendarClock className="size-4" /> Scheduled
         </button>
-        {FEATURES.venues && (
-          <button
-            type="button"
-            onClick={() => setView("vault")}
-            disabled={!backendConnected}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-sidebar-accent",
-              view === "vault"
-                ? "bg-sidebar-accent font-medium text-sidebar-foreground"
-                : "text-muted-foreground",
-              !backendConnected && "pointer-events-none opacity-50",
-            )}
-          >
-            <KeyRound className="size-4" /> Key Vault
-          </button>
-        )}
         <button
           type="button"
           onClick={openNewAgent}
@@ -162,7 +143,6 @@ export function AgentSidebar() {
           </div>
         )}
         <UpdateButton />
-        <HostedLinks />
         <button
           type="button"
           onClick={() => setView("settings")}

@@ -1,5 +1,4 @@
 import type { Agent } from "@shared/agent";
-import { APP_DISPLAY_NAME } from "@shared/app-identity";
 import { Bot, Hourglass, RotateCw, ShieldCheck, Zap } from "lucide-react";
 import { type CSSProperties, useEffect, useRef } from "react";
 import { useSettings } from "../../hooks/useSettings";
@@ -72,7 +71,7 @@ export function TerminalPane({ agent }: { agent: Agent | null }) {
               <TooltipContent>{agent.harness === "codex" ? "Codex" : "Claude Code"}</TooltipContent>
             </Tooltip>
           )}
-          {agent ? agent.name : APP_DISPLAY_NAME}
+          {agent ? agent.name : "OpenTrade"}
         </span>
         <div
           className={cn("flex items-center gap-2", !backendConnected && "pointer-events-none")}
