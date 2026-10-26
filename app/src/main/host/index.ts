@@ -12,8 +12,6 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { APP_DISPLAY_NAME, IS_NIGHTLY } from "@shared/app-identity";
-import { FEATURES } from "@shared/feature-flags";
 import { isPrereleaseVersion } from "@shared/updater";
 import { createDb, OPENTRADE_HOME } from "../db/client";
 import { AgentRegistry } from "../services/agents/registry";
@@ -28,7 +26,6 @@ import { registerHarness } from "../services/harness";
 import { CODEX_SUBSCRIPTION_AUTH_STRIP, createCodexHarness } from "../services/harness/codex";
 import { CodexAppServerManager } from "../services/harness/codex-app-server";
 import { buildCodexAnswerer, buildInteractivePushFactory } from "../services/harness/codex-gate";
-import { setIntegrationSource } from "../services/integrations";
 import { LocalApiServer } from "../services/local-api";
 import { derivePort } from "../services/local-api/endpoint";
 import { RecentNotificationsService } from "../services/notifications/recent";
@@ -44,13 +41,7 @@ import { SettingsService } from "../services/settings";
 import { StatusArbiter } from "../services/status/arbiter";
 import { TerminalService } from "../services/terminal";
 import { buildAgentEnv } from "../services/terminal/env";
-import { VaultService } from "../services/vault";
-import { HyperliquidService } from "../services/venues/hyperliquid";
-import { KalshiService } from "../services/venues/kalshi";
 import type { Context } from "../trpc/trpc";
-import { HostedEdge } from "./edge";
-import { HOSTED_PRIVATE_ENV, hostedConfig, IS_HOSTED } from "./hosted";
-import { startHostedNotify } from "./hosted-notify";
 import { hostLog } from "./log";
 import { clearManifest, writeManifest } from "./manifest";
 import { HostTrpcServer } from "./trpc-server";
@@ -62,11 +53,6 @@ import { HostTrpcServer } from "./trpc-server";
  * abandoned (both end in `OAUTH_TIMEOUT`).
  */
 function openExternal(url: string): void {
-  // Hosted: no browser in the sandbox; the web app shows the link to the user instead.
-  if (IS_HOSTED) {
-    bus.emitEvent("system:open-url", { url, purpose: "broker" });
-    return;
-  }
   const cmd =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   execFile(cmd, [url], (err) => {
@@ -79,23 +65,14 @@ function openExternal(url: string): void {
 async function main() {
   // Name the detached backend so it reads as OpenTrade in `ps`/`top` (it's an
   // ELECTRON_RUN_AS_NODE child of the app binary). See docs/PACKAGING.md.
-  process.title = `${APP_DISPLAY_NAME} Host`;
+  process.title = "OpenTrade Host";
   hostLog.info(`host starting (pid ${process.pid}) home=${OPENTRADE_HOME}`);
-  // Hosted: read the sandbox's private config, then drop it from the env every agent
-  // inherits (buildAgentEnv copies process.env).
-  const hosted = IS_HOSTED ? hostedConfig() : null;
-  for (const key of HOSTED_PRIVATE_ENV) delete process.env[key];
 
   const db = createDb(hostLog);
   const registry = new AgentRegistry(db);
   registry.resetStatusesOnBoot();
 
   const settings = new SettingsService(db);
-  // Hosted agents have no subscription login: model access is the per-sandbox key the
-  // gateway meters, so background runs must keep it rather than strip it.
-  if (hosted && !settings.get().backgroundAllowApiKey) {
-    settings.update({ backgroundAllowApiKey: true });
-  }
   // Durable Recent ring buffer for the tray (§12.6). Subscribed HERE, before anything
   // that can emit `notify` — the scheduler's boot catch-up sweep (scheduler.start()
   // below) fires wake notifications synchronously, and the broker auto-connect can too.
@@ -108,21 +85,6 @@ async function main() {
   const arbiter = new StatusArbiter(registry);
   const audit = new AuditLog(db, registry);
   const approvals = new ApprovalService(db, registry, audit, arbiter);
-  // Key Vault: optional venue credentials + integration switches. Registered as the
-  // process-wide integration source BEFORE anything can spawn an agent, so every
-  // harness config write and agent env reflects it (Robinhood / Kalshi / Hyperliquid / PMXT).
-  // Experimental (`FEATURES.venues`, Nightly only): off, the vault isn't consulted and
-  // agents keep the pre-vault behavior — Robinhood only, no extra env, no Kalshi.
-  const vault = new VaultService(db);
-  const kalshi = new KalshiService(vault, approvals);
-  const hyperliquid = new HyperliquidService(vault, approvals);
-  if (FEATURES.venues) {
-    setIntegrationSource(vault);
-    // Poll the Kalshi account (Portfolio → Kalshi, the connected indicator); idles
-    // while the vault has no Kalshi key and re-arms whenever the vault changes.
-    kalshi.start();
-    hyperliquid.start();
-  }
   // Fresh host process → no agent hook is still long-polling, so pending rows
   // really are orphans.
   approvals.expireOrphansOnBoot();
@@ -153,8 +115,6 @@ async function main() {
     approvals,
     registry,
     arbiter,
-    kalshi: FEATURES.venues ? kalshi : undefined,
-    hyperliquid: FEATURES.venues ? hyperliquid : undefined,
     port: derivePort(),
     token,
   });
@@ -248,9 +208,6 @@ async function main() {
     scheduler,
     wake,
     recent,
-    vault,
-    kalshi,
-    hyperliquid,
   };
   const trpc = new HostTrpcServer(ctx, token);
   await trpc.listen();
@@ -267,20 +224,6 @@ async function main() {
     version: process.env.OPENTRADE_VERSION ?? "0.0.0",
   });
   hostLog.info(`host ready: faucet=${localApi.port} trpc=${trpc.port}`);
-
-  const edge = hosted
-    ? new HostedEdge(
-        () => ({ trpcPort: trpc.port, terminalPort: terminal.wsPort, token }),
-        hosted.edgeSecret,
-      )
-    : null;
-  if (edge && hosted) {
-    await edge.listen(hosted.edgePort);
-    hostLog.info(`hosted edge listening on :${hosted.edgePort}`);
-    if (hosted.gatewayUrl && hosted.sandboxKey) {
-      startHostedNotify(hosted.gatewayUrl, hosted.sandboxKey);
-    }
-  }
 
   // Telemetry lifecycle: the host is up. `app_updated` fires once per version
   // transition (the reliable "an update actually landed" signal for the detached
@@ -300,8 +243,7 @@ async function main() {
     // stays there, through the graduation to the stable release, until the user turns it
     // off in Settings → About; that explicit off holds until the next beta is installed by
     // hand. (A same-value write is a no-op downstream: no telemetry, no updater re-check.)
-    // Nightly versions are prereleases too, but Nightly has its own feed (no beta toggle).
-    if (isPrereleaseVersion(runVersion) && !IS_NIGHTLY) {
+    if (isPrereleaseVersion(runVersion)) {
       settings.update({ updateChannel: "beta" });
       hostLog.info(`beta build ${runVersion} installed — update channel set to beta`);
     }
@@ -320,7 +262,6 @@ async function main() {
     codexManager.stopAll();
     terminal.stop();
     localApi.stop();
-    edge?.close();
     trpc.close();
     // Flush any queued telemetry before exiting (bounded so we can't hang on quit).
     void analytics.shutdown(1500).finally(() => {

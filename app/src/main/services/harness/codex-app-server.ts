@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { APP_HOME_DIRNAME } from "@shared/app-identity";
 import WebSocket from "ws";
 import { OPENTRADE_HOME } from "../../db/client";
 import { hostLog } from "../../host/log";
@@ -43,7 +42,7 @@ export function controlSocketPath(codexHome: string): string {
  */
 export function codexHomeFor(agentSlug: string): string {
   const key = createHash("sha256").update(`${OPENTRADE_HOME}:${agentSlug}`).digest("hex");
-  return join(homedir(), APP_HOME_DIRNAME, "cx", key.slice(0, 10));
+  return join(homedir(), ".opentrade", "cx", key.slice(0, 10));
 }
 
 /** The server itself couldn't be brought up (spawn/socket/crash-loop) — a config

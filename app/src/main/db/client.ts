@@ -1,7 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { APP_HOME_DIRNAME } from "@shared/app-identity";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { backupBeforeMigration } from "./backup";
@@ -9,9 +8,7 @@ import { SCHEMA_DDL } from "./ddl";
 import { type MigrationDb, migrate, SCHEMA_VERSION, userVersion } from "./migrate";
 import * as schema from "./schema";
 
-/** The data home: `~/.opentrade`, or `~/.opentrade-nightly` for OpenTrade Nightly (see
- *  `@shared/app-identity`). */
-export const OPENTRADE_HOME = process.env.OPENTRADE_HOME ?? join(homedir(), APP_HOME_DIRNAME);
+export const OPENTRADE_HOME = process.env.OPENTRADE_HOME ?? join(homedir(), ".opentrade");
 
 function ensureHome() {
   // 0700: the home holds plaintext broker tokens (no safeStorage under

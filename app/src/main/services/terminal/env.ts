@@ -1,8 +1,6 @@
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { OPENTRADE_HOME } from "../../db/client";
-import { IS_HOSTED } from "../../host/hosted";
-import { integrationEnv } from "../integrations";
 
 /**
  * Build the environment for an agent's PTY. We inherit the app's env, ensure the
@@ -16,21 +14,7 @@ import { integrationEnv } from "../integrations";
  * bills the user's logged-in subscription instead of silently hitting an API key —
  * the whole app env is inherited, so a key in the user's shell would otherwise
  * leak into every unattended run (the "unattended runs bill the API" cost bug).
- *
- * Integration env from the Key Vault (e.g. `PMXT_API_KEY`, which the agents' PMXT MCP
- * entries reference by name) is layered in here — the single choke point every agent
- * spawn (PTY, headless wake, codex app-server) goes through.
  */
-/**
- * Variables an agent CLI sets for ITS OWN children. If OpenTrade itself was started from
- * inside an agent session (`open OpenTrade.app` from a Claude Code or Codex terminal —
- * macOS hands the caller's env to the app), they would be inherited by every agent and
- * make each one believe it is a sub-session of that outer session: Claude Code then
- * skips writing the agent's transcript, so its conversation can't be resumed.
- */
-const PARENT_SESSION_ENV =
-  /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PLUGIN_DATA|CLAUDE_CODE_(SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|ENTRYPOINT|EXECPATH|MESSAGING_\w+)|CODEX_COMPANION_\w+)$/;
-
 export function buildAgentEnv(
   agentId: string,
   extra?: Record<string, string>,
@@ -38,14 +22,14 @@ export function buildAgentEnv(
 ): Record<string, string> {
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === "string" && !PARENT_SESSION_ENV.test(k)) base[k] = v;
+    if (typeof v === "string") base[k] = v;
   }
 
   for (const key of opts?.stripEnvKeys ?? []) delete base[key];
 
   const home = homedir();
   const extraPathDirs = [
-    join(OPENTRADE_HOME, "bin"),
+    join(home, ".opentrade", "bin"),
     join(home, ".local", "bin"),
     join(home, ".bun", "bin"),
     join(home, "bin"),
@@ -62,9 +46,6 @@ export function buildAgentEnv(
   base.COLORTERM = "truecolor";
   base.OPENTRADE_AGENT_ID = agentId;
   base.OPENTRADE_HOME = OPENTRADE_HOME;
-  // OpenTrade Cloud: tag every model request with the agent, so the gateway's metering
-  // proxy can attribute cost per agent (Claude Code sends ANTHROPIC_CUSTOM_HEADERS).
-  if (IS_HOSTED) base.ANTHROPIC_CUSTOM_HEADERS = `x-opentrade-agent: ${agentId}`;
 
-  return { ...base, ...integrationEnv(), ...extra };
+  return { ...base, ...extra };
 }

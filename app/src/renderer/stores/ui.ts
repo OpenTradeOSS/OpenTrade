@@ -3,10 +3,8 @@ import { create } from "zustand";
 export type RightTab = "portfolio" | "activity" | "monitor";
 /** What the Portfolio tables' last column shows. Cycled by clicking the column header. */
 export type PositionsMetric = "pnl" | "pct" | "value";
-/** Which venue the right panel's Portfolio + Activity tabs show. Session-only. */
-export type Venue = "all" | "robinhood" | "kalshi" | "hyperliquid";
-/** Top-level pane: the agent workspace, a full-screen Scheduled / Key Vault view, or Settings. */
-export type AppView = "agents" | "scheduled" | "vault" | "settings";
+/** Top-level pane: the agent workspace, the full-screen Scheduled view, or Settings. */
+export type AppView = "agents" | "scheduled" | "settings";
 
 interface UIState {
   selectedAgentId: string | null;
@@ -18,7 +16,6 @@ interface UIState {
   balancesHidden: boolean;
   /** Last column of the Equities/Options tables: P&L $ / % gain / market value. Session-only. */
   positionsMetric: PositionsMetric;
-  venue: Venue;
   select: (id: string | null) => void;
   setRightTab: (tab: RightTab) => void;
   setView: (view: AppView) => void;
@@ -26,7 +23,6 @@ interface UIState {
   closeNewAgent: () => void;
   toggleBalances: () => void;
   cyclePositionsMetric: () => void;
-  setVenue: (venue: Venue) => void;
 }
 
 const METRIC_CYCLE: Record<PositionsMetric, PositionsMetric> = {
@@ -42,7 +38,6 @@ export const useUIStore = create<UIState>((set) => ({
   newAgentOpen: false,
   balancesHidden: false,
   positionsMetric: "pnl",
-  venue: "all",
   select: (id) => set({ selectedAgentId: id }),
   setRightTab: (tab) => set({ rightTab: tab }),
   setView: (view) => set({ view }),
@@ -50,5 +45,4 @@ export const useUIStore = create<UIState>((set) => ({
   closeNewAgent: () => set({ newAgentOpen: false }),
   toggleBalances: () => set((s) => ({ balancesHidden: !s.balancesHidden })),
   cyclePositionsMetric: () => set((s) => ({ positionsMetric: METRIC_CYCLE[s.positionsMetric] })),
-  setVenue: (venue) => set({ venue }),
 }));

@@ -1,4 +1,3 @@
-import { APP_DISPLAY_NAME, IS_NIGHTLY } from "@shared/app-identity";
 import { isPrereleaseVersion } from "@shared/updater";
 import {
   Bell,
@@ -122,7 +121,7 @@ function GeneralPanel() {
         title="Menu bar"
         description="Keep an eye on your agents from the macOS menu bar."
       >
-        <SettingsRow label={`Show ${APP_DISPLAY_NAME} in the menu bar`}>
+        <SettingsRow label="Show OpenTrade in the menu bar">
           <SettingToggle
             checked={s.showInMenuBar}
             onChange={(showInMenuBar) => update.mutate({ showInMenuBar })}
@@ -151,8 +150,8 @@ function GeneralPanel() {
             shell bridge (window.__opentradeShell), not tRPC; absent in a plain browser. */}
         {window.__opentradeShell && (
           <SettingsRow
-            label={`Quit ${APP_DISPLAY_NAME} completely`}
-            hint={`Stops the ${APP_DISPLAY_NAME} host process. Agents will not run in the background until you reopen the app.`}
+            label="Quit OpenTrade completely"
+            hint="Stops the OpenTrade host process. Agents will not run in the background until you reopen the app."
           >
             <Button
               type="button"
@@ -543,8 +542,7 @@ function AboutPanel() {
         </span>
       </SettingsRow>
       <SoftwareUpdateRow />
-      {/* Nightly has its own feed; the beta opt-in only applies to OpenTrade. */}
-      {!IS_NIGHTLY && <BetaUpdatesRow />}
+      <BetaUpdatesRow />
       <SettingsRow label="Platform">
         <span className="text-sm text-muted-foreground">{info.data?.platform ?? "—"}</span>
       </SettingsRow>
