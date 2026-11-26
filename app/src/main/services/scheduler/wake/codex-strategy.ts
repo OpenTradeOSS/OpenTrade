@@ -18,7 +18,8 @@ import type { HeadlessExit, HeadlessWakeStrategy } from "./types";
  * runs as ONE TURN on the agent's supervised app-server (`thread/resume` +
  * `turn/start`, await `turn/completed`) — the same engine the TUI attaches to, so
  * single-writer holds by construction. Exit-reason mapping mirrors claude's:
- * a failed turn / unresumable thread → `resumeFail` (3 strikes → broken), a server
+ * a failed turn / unresumable thread → `resumeFail` (3 session-fault strikes → broken;
+ * auth/billing/rate-limit/network failures never strike), a server
  * that can't come up → `spawnFail` (one-strike broken), everything else `ok`.
  * "Stop task" / the coordinator's kill timer abort via `turn/interrupt`.
  */
@@ -89,7 +90,7 @@ export class CodexHeadlessStrategy implements HeadlessWakeStrategy {
         );
         if (result.outcome === "failed") {
           hostLog.warn("codex wake turn failed", agentId, result.error);
-          settle("resumeFail", classifyWakeFailure(String(result.error)));
+          settle("resumeFail", classifyWakeFailure(result.error));
         } else if (result.outcome === "interrupted" && !acked) {
           // Killed before delivery. Both kill paths (user Stop, the kill timer) are
           // short-circuited by the coordinator's own `stopping` / `timedOut` flags before
