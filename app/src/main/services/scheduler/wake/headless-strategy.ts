@@ -179,11 +179,11 @@ export class HeadlessRunStrategy implements HeadlessWakeStrategy {
         );
       }
       if (resuming && code !== 0 && Date.now() - startedAt < RESUME_FAIL_MS) {
-        // EC13: a `--resume` that dies this fast is treated as an unresumable session —
-        // reported as a resume-fail, so the coordinator drops the wake and, after 3 in a
-        // row, flips the agent to `broken` (which pauses its scheduling). This is also the
-        // heuristic that fires on a valid transient error like an exhausted credit balance:
-        // that legitimately stops the agent until the user intervenes (top up + Restart).
+        // EC13: a `--resume` that dies this fast is reported as a resume-fail with its
+        // classified category. The coordinator drops the wake; an unresumable-session (or
+        // unrecognized) failure counts toward the 3 strikes that flip the agent to
+        // `broken`, while an auth/billing/rate-limit/network failure does not — the
+        // session is fine, and the next wake succeeds once the user fixes the cause.
         settle("resumeFail", classifyWakeFailure(stderrTail));
       } else {
         settle("ok");

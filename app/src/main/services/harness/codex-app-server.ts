@@ -69,6 +69,14 @@ export type CodexTurnOutcome =
   | { outcome: "failed"; error: string }
   | { outcome: "interrupted" };
 
+/** A failed turn's `error` as text. It's untyped on the wire and may be an object
+ *  (e.g. `{ message, codexErrorInfo }`); `String()` would flatten that to
+ *  "[object Object]" and hide the cause from `classifyWakeFailure`. */
+export function turnErrorText(error: unknown): string {
+  if (error == null) return "turn failed";
+  return typeof error === "string" ? error : JSON.stringify(error);
+}
+
 /**
  * Answers server→client requests that arrive while the backend is driving a
  * turn (approvals/elicitations). Implemented by the harness glue: order tools
@@ -403,11 +411,15 @@ export class CodexAppServerManager {
           threadId,
           includeTurns: true,
         })) as {
-          thread?: { status?: { type?: string }; turns?: Array<{ id: string; status?: string }> };
+          thread?: {
+            status?: { type?: string };
+            turns?: Array<{ id: string; status?: string; error?: unknown }>;
+          };
         };
         const turn = res?.thread?.turns?.find((t) => t.id === turnId);
         if (turn?.status === "completed") return { outcome: "completed" };
-        if (turn?.status === "failed") return { outcome: "failed", error: "turn failed" };
+        if (turn?.status === "failed")
+          return { outcome: "failed", error: turnErrorText(turn.error) };
         if (turn?.status === "interrupted") return { outcome: "interrupted" };
         // No per-turn record but the thread is idle again → treat as completed.
         if (!turn && res?.thread?.status?.type === "idle") return { outcome: "completed" };
@@ -587,11 +599,11 @@ export class CodexClient {
           const status = p.turn?.status;
           if (status === "interrupted") resolve({ outcome: "interrupted" });
           else if (status === "failed")
-            resolve({ outcome: "failed", error: String(p.turn?.error ?? "turn failed") });
+            resolve({ outcome: "failed", error: turnErrorText(p.turn?.error) });
           else resolve({ outcome: "completed" });
         } else if (msg.method === "turn/failed") {
           remove();
-          resolve({ outcome: "failed", error: String(p.turn?.error ?? "turn failed") });
+          resolve({ outcome: "failed", error: turnErrorText(p.turn?.error) });
         }
       };
       const remove = () => {

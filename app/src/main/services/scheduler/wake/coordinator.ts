@@ -40,6 +40,14 @@ const SLEEP_GUARD_AUDIT_MS = 60 * 60_000;
  *  failure drops its own wake; the Nth in a row flips the agent to `broken`. Any clean
  *  exit resets the streak — normal timeouts throughout, no backoff. */
 const MAX_RESUME_FAILS = 3;
+/** Resume-fail categories that can mean the session itself is unresumable, so they count
+ *  toward `MAX_RESUME_FAILS`. An uncategorized failure counts too. Everything else
+ *  (`auth`, `billing`, `rate_limit`, `network`) is an account or connectivity problem:
+ *  the wake is dropped but the agent stays `offline` and resumable. */
+const SESSION_FAULT_CATEGORIES: ReadonlySet<WakeFailureCategory> = new Set([
+  "unknown_session",
+  "other",
+]);
 
 /**
  * Per-agent state machine. One state at a time, 1:1 with the four `executionState`
@@ -47,7 +55,8 @@ const MAX_RESUME_FAILS = 3;
  *  - `OFFLINE`             — no live PTY; wakes drain via the `-p` transport
  *  - `INTERACTIVE_RUNNING` — a live PTY exists; wakes deliver via `claude/channel`
  *  - `HEADLESS_RUNNING`    — a `-p` child is delivering the head (kill timer armed)
- *  - `BROKEN`              — unresumable (3 consecutive resume-fails, or a spawn error)
+ *  - `BROKEN`              — unresumable (3 consecutive session-fault resume-fails, or a
+ *                            spawn error)
  */
 type WriterState = "OFFLINE" | "INTERACTIVE_RUNNING" | "HEADLESS_RUNNING" | "BROKEN";
 
@@ -459,16 +468,21 @@ class AgentWriter {
       return;
     }
     if (reason === "resumeFail") {
+      const category = apiError ?? failureCategory;
       this.recordFinished(
         head,
-        {
-          outcome: "failed",
-          failureReason: "resume_fail",
-          failureCategory: apiError ?? failureCategory,
-        },
+        { outcome: "failed", failureReason: "resume_fail", failureCategory: category },
         this.runInfo(),
       );
       this.pending.shift(); // drop the failed wake
+      // An account/connectivity failure (signed out, no credit, throttled, offline) says
+      // nothing about the session — it's still resumable, and the next wake succeeds once
+      // the user fixes the cause. It neither strikes nor resets the streak.
+      if (category && !SESSION_FAULT_CATEGORIES.has(category)) {
+        this.transition("OFFLINE");
+        this.drain();
+        return;
+      }
       this.resumeFailCount += 1;
       if (this.resumeFailCount >= MAX_RESUME_FAILS) {
         this.pending = []; // genuinely unresumable — drop the rest

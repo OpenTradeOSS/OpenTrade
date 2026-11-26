@@ -124,6 +124,25 @@ describe("CodexClient against a scripted app-server", () => {
     client.close();
   });
 
+  test("an object turn error keeps its text (not '[object Object]')", async () => {
+    const error = { message: "401 Unauthorized", codexErrorInfo: "unauthorized" };
+    const { sock } = mockServer({
+      "turn/start": (msg, send) => {
+        send({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: "turn-3" } } });
+        send({
+          jsonrpc: "2.0",
+          method: "turn/failed",
+          params: { threadId: THREAD, turn: { id: "turn-3", status: "failed", error } },
+        });
+      },
+    });
+    const client = await CodexClient.connect(sock);
+    await client.request("turn/start", { threadId: THREAD, input: [] });
+    const outcome = await client.waitForTurnOutcome(THREAD, "turn-3");
+    expect(outcome).toEqual({ outcome: "failed", error: JSON.stringify(error) });
+    client.close();
+  });
+
   test("server→client requests are answered via the injected answerer", async () => {
     const { sock, replies } = mockServer({
       "turn/start": (msg, send) => {

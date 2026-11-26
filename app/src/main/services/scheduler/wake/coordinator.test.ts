@@ -302,16 +302,18 @@ describe("WakeCoordinator — broken / resume-fail", () => {
     expect(await coord.awaitPoll("h", ac.signal, 10)).toBeNull();
   });
 
-  test("broken only after 3 consecutive resume-fails; each drops its own wake", () => {
+  test("broken only after 3 consecutive session-fault resume-fails; each drops its own wake", () => {
     const { reg, headless, coord } = make();
-    for (let i = 1; i <= 2; i++) {
-      coord.enqueue("r", w(`p${i}`));
+    // unknown_session, other, and uncategorized all count as session faults.
+    const categories = ["unknown_session", "other"] as const;
+    categories.forEach((category, i) => {
+      coord.enqueue("r", w(`p${i + 1}`));
       expect(reg.executionStateOf("r")).toBe("headless");
-      headless.finishNext("resumeFail"); // drops the wake, increments the streak
+      headless.finishNext("resumeFail", category); // drops the wake, increments the streak
       expect(reg.executionStateOf("r")).toBe("offline"); // not broken yet
-    }
+    });
     coord.enqueue("r", w("p3"));
-    headless.finishNext("resumeFail"); // 3rd in a row
+    headless.finishNext("resumeFail"); // 3rd in a row (uncategorized)
     expect(reg.executionStateOf("r")).toBe("broken");
     expect(headless.calls).toEqual(["r:p1", "r:p2", "r:p3"]); // each ran once, then dropped
   });
@@ -325,6 +327,31 @@ describe("WakeCoordinator — broken / resume-fail", () => {
     coord.enqueue("s", w("p3"));
     headless.finishNext("resumeFail"); // streak = 1 again, NOT 3
     expect(reg.executionStateOf("s")).toBe("offline");
+  });
+
+  test("account/connectivity resume-fails never mark the agent broken", () => {
+    const { reg, headless, coord } = make();
+    const categories = ["auth", "billing", "rate_limit", "network", "auth"] as const;
+    categories.forEach((category, i) => {
+      coord.enqueue("acct", w(`p${i}`));
+      headless.finishNext("resumeFail", category);
+      expect(reg.executionStateOf("acct")).toBe("offline");
+    });
+    expect(headless.calls).toHaveLength(categories.length); // each wake ran, none paused
+  });
+
+  test("an account failure neither strikes nor resets the session-fault streak", () => {
+    const { reg, headless, coord } = make();
+    coord.enqueue("mx", w("p1"));
+    headless.finishNext("resumeFail", "unknown_session"); // streak = 1
+    coord.enqueue("mx", w("p2"));
+    headless.finishNext("resumeFail", "unknown_session"); // streak = 2
+    coord.enqueue("mx", w("p3"));
+    headless.finishNext("resumeFail", "auth"); // no strike, no reset
+    expect(reg.executionStateOf("mx")).toBe("offline");
+    coord.enqueue("mx", w("p4"));
+    headless.finishNext("resumeFail", "unknown_session"); // streak = 3
+    expect(reg.executionStateOf("mx")).toBe("broken");
   });
 
   test("a spawn error is one-strike broken and drops the queue", () => {
@@ -766,6 +793,16 @@ describe("WakeCoordinator — History recording (wakeStarted / wakeFinished)", (
         result: { outcome: "failed", failureReason: "resume_fail", failureCategory: "auth" },
       },
     ]);
+  });
+
+  test("StopFailure's account category keeps a resume-fail from striking", () => {
+    const { reg, headless, coord } = make();
+    for (let i = 1; i <= 3; i++) {
+      coord.enqueue("sa", w(`p${i}`));
+      coord.onTurnFailed("sa", "auth");
+      headless.finishNext("resumeFail", "other"); // stderr guess would have struck
+    }
+    expect(reg.executionStateOf("sa")).toBe("offline");
   });
 
   test("StopFailure with nothing outstanding is a no-op", () => {
